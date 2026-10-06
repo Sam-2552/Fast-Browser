@@ -4,40 +4,59 @@ You are an AI agent. This file tells you how to use `fast-browser`, a browser yo
 
 ## Starting the server
 
-### Option A: Local (headed — visible browser window)
+**Always use Docker. Do not run `npm install` or `node server.mjs` directly.** The Docker image has Chromium built in — no local dependencies needed.
+
+### Check if the image exists
 
 ```bash
-cd <repo-root>
-npm install
+docker images fast-browser --format "{{.Repository}}:{{.Tag}}"
 ```
 
-**Windows:**
-```cmd
-set HEADED=1 && set PORT=9222 && node server.mjs
-```
-
-**Linux/macOS:**
-```bash
-HEADED=1 PORT=9222 node server.mjs
-```
-
-A Chrome window opens on your screen. Every action you send plays out visibly in real time. Uses your installed Chrome/Chromium with a dedicated profile at `./profile-local` (logins persist). Set `CHROME_BIN` if Chrome is not in the default location.
-
-### Option B: Docker (headless — for parallel/production use)
+If it prints `fast-browser:latest`, skip to "Run a container". Otherwise build it first:
 
 ```bash
 docker build -t fast-browser .
+```
+
+### Run a container
+
+```bash
 docker run -d --name browser -p 9222:9222 fast-browser
 ```
 
-No visible window. Use `GET /shot` to see the current page as a JPEG at any time. Mount a volume for persistent logins: `-v my-profile:/data/profile`.
+For persistent logins (cookies survive container restarts):
 
-### Verifying it's running
+```bash
+docker run -d --name browser -p 9222:9222 -v browser-profile:/data/profile fast-browser
+```
+
+### Multiple containers (parallel sessions / different logins)
+
+```bash
+docker run -d --name browser-0 -p 9100:9222 -v profile-0:/data/profile fast-browser
+docker run -d --name browser-1 -p 9101:9222 -v profile-1:/data/profile fast-browser
+docker run -d --name browser-2 -p 9102:9222 -v profile-2:/data/profile fast-browser
+```
+
+Each container is an isolated browser with its own cookies, localStorage, and login state.
+
+### Verify it's running
 
 ```bash
 curl http://localhost:9222/health
 # {"ok":true,"browser":"open","pages":1,"uptime_s":3}
 ```
+
+If the container already exists but is stopped: `docker start browser`
+
+### Headed mode (visible browser — only for local debugging)
+
+Only use this when the user explicitly asks to watch the browser. Requires Chrome/Chromium installed locally.
+
+**Windows:** `set HEADED=1 && set PORT=9222 && node server.mjs`
+**Linux/macOS:** `HEADED=1 PORT=9222 node server.mjs`
+
+This is the only case where `npm install` is needed.
 
 ## Connection
 
@@ -48,12 +67,11 @@ Content-Type: application/json
 {"code": "<your JavaScript here>"}
 ```
 
-The default port is `9222`. If multiple instances are running, each is on a different port. Check with `GET /health`.
+The default port is `9222`. If multiple containers are running, each is on a different port. Check with `GET /health`.
 
 ## Seeing the browser
 
-- **Headed mode** (Option A): The browser window is visible. You watch it work.
-- **Headless mode** (Option B): Call `GET /shot` or include `return await shot()` in your code to get a JPEG screenshot of the current page at any point. Save it to disk to inspect.
+Call `GET /shot` or include `return await shot()` in your code to get a JPEG screenshot of the current page at any point. Save it to disk to inspect.
 
 ## Core rule: batch your actions
 
