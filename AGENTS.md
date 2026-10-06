@@ -5,9 +5,9 @@ You are an AI agent. This file tells you how to use `fast-browser`, a browser yo
 ## Important rules
 
 1. **Do not read or modify `server.mjs`.** It is a black box. Everything you need is in this file.
-2. **Do not run `npm install` unless you are starting headed mode.** Docker containers have everything built in.
-3. **Never ask the user for passwords.** Use headed mode and let them type credentials visually. See "Login and authentication" below.
-4. **Repo location:** `D:\github\fast-browser`. Use this path when you need to build the Docker image or start headed mode.
+2. **Do not run `npm install` or `node server.mjs` locally.** Everything runs in Docker containers.
+3. **Never ask the user for passwords.** Direct them to the live viewer URL and let them type credentials there. See "Login and authentication" below.
+4. **Repo location:** `D:\github\fast-browser`. Use this path when you need to build the Docker image.
 
 ## Starting the server
 
@@ -56,56 +56,23 @@ curl http://localhost:9222/health
 
 If the container already exists but is stopped: `docker start browser`
 
-### Headed mode (visible browser window)
-
-Use headed mode when:
-- The user needs to **log in manually** (type credentials, solve CAPTCHAs, complete MFA)
-- The user wants to **watch** the browser work
-- You hit a login page and don't have stored credentials
-
-Headed mode requires `npm install` once in the repo, then:
-
-**Windows:**
-```cmd
-cd /d D:\github\fast-browser
-set HEADED=1 && set PORT=9222 && set PROFILE_DIR=D:\github\fast-browser\profile-local && node server.mjs
-```
-
-**macOS/Linux:**
-```bash
-cd /path/to/fast-browser
-HEADED=1 PORT=9222 PROFILE_DIR=./profile-local node server.mjs
-```
-
-**You must set `PROFILE_DIR`** to a dedicated directory inside the repo (e.g., `./profile-local`). If you omit it, the server defaults to `/data/profile` which doesn't exist outside Docker, or may conflict with an existing Chrome session. Each headed instance should use its own profile directory.
-
-A Chrome window opens. The API is identical to Docker — same port, same endpoints. After the user logs in visually, the session is saved to `PROFILE_DIR` and persists across restarts.
-
-To run headed on a different port (alongside Docker containers):
-```bash
-# Windows:
-set HEADED=1 && set PORT=9200 && set PROFILE_DIR=.\profile-9200 && node server.mjs
-# macOS/Linux:
-HEADED=1 PORT=9200 PROFILE_DIR=./profile-9200 node server.mjs
-```
-
 ## Login and authentication
 
 **Never ask the user for passwords.** Instead:
 
-1. Start a **headed** instance (see above).
-2. Navigate to the login page: `POST /run {"code": "await goto('https://target.com/login')"}`
-3. Tell the user: "The login page is open in the browser window. Please sign in, then let me know when you're done."
+1. Navigate to the login page: `POST /run {"code": "await goto('https://target.com/login')"}`
+2. Tell the user: **"Open http://localhost:<port>/view in your browser to log in, then let me know when you're done."**
+3. The user opens the live viewer, sees the login page, clicks and types their credentials directly.
 4. Wait for the user to confirm.
-5. The session is now saved in the profile.
+5. The session (cookies, localStorage) is now saved in the container's profile.
 
-To transfer the login to Docker containers, use profile snapshot/load (see "Profiles" below):
+To share the login across multiple containers, use profile snapshot/load (see "Profiles" below):
 ```bash
 curl http://localhost:9222/profile/snapshot -o session.tar.gz
 curl -X POST http://localhost:9100/profile/load -H "Content-Type: application/gzip" --data-binary @session.tar.gz
 ```
 
-**If you encounter a login page in a headless Docker container**, do not attempt to fill credentials programmatically. Tell the user you need headed mode for login and switch to it.
+**If you encounter a login page**, do not attempt to fill credentials programmatically. Direct the user to the `/view` URL.
 
 ## Profiles
 
@@ -143,7 +110,7 @@ The browser restarts with the imported profile. All cookies and localStorage fro
 ### Share one login across many containers
 
 ```bash
-# 1. Snapshot the authenticated container (headed or Docker)
+# 1. Snapshot the authenticated container
 curl http://localhost:9222/profile/snapshot -o session.tar.gz
 
 # 2. Load into every worker
@@ -185,8 +152,8 @@ The default port is `9222`. If multiple instances are running, each is on a diff
 
 ## Seeing the browser
 
-- **Headed mode**: The browser window is visible on the user's screen.
-- **Headless Docker**: Call `GET /shot` to get a JPEG screenshot, or use `return await shot()` in your code. Save it to disk to inspect.
+- **Live viewer**: Tell the user to open `http://localhost:<port>/view` in their browser. They can see the page, click, type, and scroll — useful for login and debugging.
+- **Screenshot**: Call `GET /shot` to get a JPEG screenshot, or use `return await shot()` in your code. Save it to disk to inspect.
 
 ## Core rule: batch your actions
 

@@ -14,32 +14,12 @@ Built to replicate the speed pattern behind ChatGPT's built-in browser: **one co
 
 ## Quick start
 
-### Headed (visible browser — watch it work)
-
-```bash
-npm install
-```
-
-**Windows:**
-```cmd
-set HEADED=1 && node server.mjs
-```
-
-**Linux/macOS:**
-```bash
-HEADED=1 node server.mjs
-```
-
-A Chrome window opens on your screen. Every call plays out visibly.
-
-### Docker (headless — for parallel/production)
-
 ```bash
 docker build -t fast-browser .
 docker run -d --name browser -p 9100:9222 fast-browser
 ```
 
-Use `curl http://localhost:9100/shot -o screenshot.jpg` to see the page at any time.
+Open **http://localhost:9100/view** in your browser to watch the page live, click, and type (useful for login).
 
 ### Call it
 
@@ -93,6 +73,21 @@ With options:
 
 ```json
 { "ok": true, "browser": "open", "pages": 1, "uptime_s": 123 }
+```
+
+### `GET /view`
+
+Opens a live interactive viewer in your browser. You can see the page, click on elements, type text, scroll, and press keys — all forwarded to the browser inside the container. Use this for login flows, CAPTCHAs, and debugging.
+
+### `POST /interact`
+
+Programmatic mouse/keyboard input (used by `/view` internally, also callable directly):
+
+```json
+{ "action": "click", "x": 640, "y": 400 }
+{ "action": "type", "text": "hello" }
+{ "action": "press", "key": "Enter" }
+{ "action": "scroll", "dy": 300 }
 ```
 
 ## Helpers
@@ -205,13 +200,14 @@ Every container starts with a fresh, empty profile. Use the profile API to expor
 ### Login once, share everywhere
 
 ```bash
-# 1. Start headed, let the user log in visually
-HEADED=1 PORT=9222 PROFILE_DIR=./profile-local node server.mjs
+# 1. Start a container, open /view in your browser, log in
+docker run -d --name login -p 9200:9222 fast-browser
+# Open http://localhost:9200/view → log in visually
 
 # 2. Export the authenticated profile
-curl http://localhost:9222/profile/snapshot -o session.tar.gz
+curl http://localhost:9200/profile/snapshot -o session.tar.gz
 
-# 3. Load into Docker workers
+# 3. Load into worker containers
 for port in 9100 9101 9102; do
   curl -X POST http://localhost:$port/profile/load \
     -H "Content-Type: application/gzip" --data-binary @session.tar.gz
@@ -249,19 +245,9 @@ Log into the same site with different accounts in each container, then crawl in 
 |---|---|---|
 | `PORT` | `9222` | HTTP server port |
 | `API_KEY` | _(none)_ | Set to require `Authorization: Bearer <key>` |
-| `HEADED` | `0` | Set to `1` for a visible browser window (local dev) |
 | `PROFILE_DIR` | `/data/profile` | Browser profile directory |
 | `PROFILE_SEED` | _(none)_ | Path to a tar.gz profile snapshot — extracted on first startup if profile dir is empty |
 | `CHROME_BIN` | auto-detected | Path to Chromium/Chrome binary |
-
-## Local development (without Docker)
-
-```bash
-npm install
-HEADED=1 node server.mjs
-```
-
-Uses your installed Chrome with a visible window. Useful for watching the agent work.
 
 ## Examples
 
@@ -307,7 +293,11 @@ return data;
 │   Python,    │                  │  Persistent browser session   │
 │   curl)      │                  │  vm-based code execution      │
 └─────────────┘                  │  Profile dir: /data/profile   │
-                                 └──────────────────────────────┘
+                                 └──────────────┬───────────────┘
+┌─────────────┐  GET /view                      │
+│  Human      │ ←───────────────────────────────┘
+│  (browser)  │  Live viewer: see, click, type
+└─────────────┘
 ```
 
 ## License

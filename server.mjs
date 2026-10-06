@@ -510,6 +510,79 @@ const server = http.createServer((req, res) => {
     });
   }
 
+  // ── GET /view ────────────────────────────────────────────────────
+  if (path === '/view' && req.method === 'GET') {
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<title>fast-browser</title><style>
+*{box-sizing:border-box;margin:0}body{background:#111;color:#eee;font:14px/1.4 system-ui,sans-serif;display:flex;flex-direction:column;height:100vh}
+#bar{display:flex;gap:6px;padding:8px;background:#222;flex-shrink:0;flex-wrap:wrap;align-items:center}
+#bar input{padding:5px 8px;background:#333;color:#eee;border:1px solid #555;border-radius:4px;font:inherit}
+#bar button{padding:5px 10px;background:#2a6;color:#fff;border:none;border-radius:4px;cursor:pointer;font:inherit}
+#bar button:hover{background:#3b7}#bar button.key{background:#444}#bar button.key:hover{background:#555}
+#bar .sep{width:1px;height:24px;background:#444}#status{color:#888;margin-left:auto;font-size:12px}
+#wrap{flex:1;overflow:auto;display:flex;justify-content:center;align-items:start;padding:8px}
+canvas{cursor:crosshair;max-width:100%;height:auto;border:1px solid #333;border-radius:4px}
+</style></head><body>
+<div id="bar">
+<input id="inp" type="text" placeholder="Type text, press Enter to send" style="width:260px" autocomplete="off">
+<button onclick="sendType()">Type</button><div class="sep"></div>
+<button class="key" onclick="sk('Enter')">Enter</button>
+<button class="key" onclick="sk('Tab')">Tab</button>
+<button class="key" onclick="sk('Escape')">Esc</button>
+<button class="key" onclick="sk('Backspace')">Bksp</button>
+<div class="sep"></div>
+<button class="key" onclick="post('/interact',{action:'scroll',dy:-400})">Scroll Up</button>
+<button class="key" onclick="post('/interact',{action:'scroll',dy:400})">Scroll Down</button>
+<span id="status">Connecting...</span>
+</div>
+<div id="wrap"><canvas id="c" width="1280" height="800"></canvas></div>
+<script>
+const c=document.getElementById('c'),cx=c.getContext('2d'),st=document.getElementById('status'),inp=document.getElementById('inp');
+let vw=1280,vh=800;
+async function post(u,d){return fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)})}
+async function refresh(){try{const r=await fetch('/shot');if(!r.ok)throw 0;const b=await r.blob(),img=await createImageBitmap(b);
+vw=img.width;vh=img.height;c.width=vw;c.height=vh;cx.drawImage(img,0,0);st.textContent='Live'}catch{st.textContent='Disconnected'}
+setTimeout(refresh,400)}
+refresh();
+c.addEventListener('click',async e=>{const r=c.getBoundingClientRect();
+const x=Math.round((e.clientX-r.left)/r.width*vw),y=Math.round((e.clientY-r.top)/r.height*vh);
+st.textContent='Click '+x+','+y;await post('/interact',{action:'click',x,y})});
+c.addEventListener('dblclick',async e=>{const r=c.getBoundingClientRect();
+const x=Math.round((e.clientX-r.left)/r.width*vw),y=Math.round((e.clientY-r.top)/r.height*vh);
+st.textContent='Dblclick '+x+','+y;await post('/interact',{action:'dblclick',x,y})});
+c.addEventListener('wheel',async e=>{e.preventDefault();
+await post('/interact',{action:'scroll',dy:e.deltaY>0?300:-300})},{passive:false});
+async function sendType(){const t=inp.value;if(!t)return;st.textContent='Typing...';
+await post('/interact',{action:'type',text:t});inp.value=''}
+async function sk(k){st.textContent='Key: '+k;await post('/interact',{action:'press',key:k})}
+inp.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();sendType()}});
+</script></body></html>`;
+    res.writeHead(200, { 'Content-Type': 'text/html', 'Content-Length': Buffer.byteLength(html) });
+    return res.end(html);
+  }
+
+  // ── POST /interact ──────────────────────────────────────────────
+  if (path === '/interact' && req.method === 'POST') {
+    return serial(async () => {
+      try {
+        await ensure();
+        const body = JSON.parse(await readBody(req));
+        const p = P();
+        switch (body.action) {
+          case 'click':    await p.mouse.click(body.x, body.y); break;
+          case 'dblclick': await p.mouse.dblclick(body.x, body.y); break;
+          case 'type':     await p.keyboard.type(body.text, { delay: 30 }); break;
+          case 'press':    await p.keyboard.press(body.key); break;
+          case 'scroll':   await p.mouse.wheel(0, body.dy || 300); break;
+          default: return jsonRes(res, 400, { ok: false, error: 'Unknown action: ' + body.action });
+        }
+        jsonRes(res, 200, { ok: true });
+      } catch (e) {
+        jsonRes(res, 500, { ok: false, error: trimErr(e) });
+      }
+    });
+  }
+
   // ── GET /profile/info ───────────────────────────────────────────
   if (path === '/profile/info' && req.method === 'GET') {
     return serial(async () => {
@@ -604,7 +677,7 @@ const server = http.createServer((req, res) => {
   // ── 404 ─────────────────────────────────────────────────────────
   jsonRes(res, 404, {
     ok: false,
-    error: 'Not found. Endpoints: POST /run, POST|GET /shot, GET /health, /profile/{info,snapshot,load,reset}',
+    error: 'Not found. Endpoints: POST /run, POST|GET /shot, GET /health, GET /view, POST /interact, /profile/{info,snapshot,load,reset}',
   });
 });
 
