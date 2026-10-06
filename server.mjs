@@ -44,6 +44,8 @@ let outBuf  = [];     // output buffer for current execution
 let netRing = [];
 let conRing = [];
 let blocked = new Set();
+let lastAction = null;  // last /interact action (for viewer cursor)
+let busy = false;       // true while /run is executing
 
 const P = () => pages[pi]; // current page shorthand
 
@@ -472,9 +474,25 @@ const server = http.createServer((req, res) => {
     });
   }
 
+  // ── GET /state ───────────────────────────────────────────────────
+  if (path === '/state' && req.method === 'GET') {
+    const p = P();
+    const tabList = pages.map((pg, i) => {
+      try { return { i, active: i === pi, url: pg.url(), title: pg.url() }; } catch { return { i, active: i === pi, url: '', title: '' }; }
+    });
+    return jsonRes(res, 200, {
+      ok: true,
+      url: p ? p.url() : '',
+      tabs: tabList,
+      busy,
+      lastAction,
+    });
+  }
+
   // ── POST /run ───────────────────────────────────────────────────
   if (path === '/run' && req.method === 'POST') {
     return serial(async () => {
+      busy = true;
       const t0 = Date.now();
       try {
         const raw = await readBody(req);
@@ -484,6 +502,8 @@ const server = http.createServer((req, res) => {
         jsonRes(res, 200, r);
       } catch (e) {
         jsonRes(res, 200, { ok: false, error: trimErr(e), elapsed_ms: Date.now() - t0 });
+      } finally {
+        busy = false;
       }
     });
   }
@@ -512,53 +532,186 @@ const server = http.createServer((req, res) => {
 
   // ── GET /view ────────────────────────────────────────────────────
   if (path === '/view' && req.method === 'GET') {
-    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+    const viewHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <title>fast-browser</title><style>
-*{box-sizing:border-box;margin:0}body{background:#111;color:#eee;font:14px/1.4 system-ui,sans-serif;display:flex;flex-direction:column;height:100vh}
-#bar{display:flex;gap:6px;padding:8px;background:#222;flex-shrink:0;flex-wrap:wrap;align-items:center}
-#bar input{padding:5px 8px;background:#333;color:#eee;border:1px solid #555;border-radius:4px;font:inherit}
-#bar button{padding:5px 10px;background:#2a6;color:#fff;border:none;border-radius:4px;cursor:pointer;font:inherit}
-#bar button:hover{background:#3b7}#bar button.key{background:#444}#bar button.key:hover{background:#555}
-#bar .sep{width:1px;height:24px;background:#444}#status{color:#888;margin-left:auto;font-size:12px}
-#wrap{flex:1;overflow:auto;display:flex;justify-content:center;align-items:start;padding:8px}
-canvas{cursor:crosshair;max-width:100%;height:auto;border:1px solid #333;border-radius:4px}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#1a1a2e;color:#eee;font:13px/1.3 system-ui,-apple-system,sans-serif;display:flex;flex-direction:column;height:100vh;overflow:hidden}
+#chrome{flex-shrink:0;background:#16213e}
+#tabs{display:flex;gap:1px;padding:4px 8px 0;background:#0f1629;overflow-x:auto;scrollbar-width:thin}
+.tab{display:flex;align-items:center;gap:6px;padding:6px 12px;background:#1a1a2e;border-radius:8px 8px 0 0;cursor:pointer;max-width:200px;min-width:60px;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#8899aa;transition:background .15s}
+.tab:hover{background:#243456}.tab.active{background:#16213e;color:#fff}
+.tab-title{overflow:hidden;text-overflow:ellipsis}
+.tab-close{opacity:.4;font-size:14px;line-height:1;padding:0 2px;border-radius:3px}
+.tab-close:hover{opacity:1;background:rgba(255,255,255,.15)}
+#nav{display:flex;align-items:center;gap:6px;padding:6px 10px;background:#16213e;border-bottom:1px solid #0d1117}
+#nav button{width:28px;height:28px;background:none;border:1px solid transparent;border-radius:6px;color:#8899aa;cursor:pointer;font-size:15px;display:flex;align-items:center;justify-content:center}
+#nav button:hover{background:#243456;border-color:#334466;color:#fff}
+#urlbar{flex:1;padding:5px 10px;background:#0f1629;color:#cdd;border:1px solid #2a3a5c;border-radius:6px;font:12px/1.4 monospace;outline:none}
+#urlbar:focus{border-color:#4488cc}
+#busy-dot{width:8px;height:8px;border-radius:50%;background:#555;margin-left:4px;transition:background .3s}
+#busy-dot.active{background:#f44;animation:pulse 1s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+#busy-label{font-size:11px;color:#888;margin-left:2px}
+#viewport{flex:1;position:relative;overflow:hidden;display:flex;justify-content:center;background:#111}
+#viewport canvas{cursor:crosshair;max-width:100%;max-height:100%;object-fit:contain}
+#cursor-layer{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none}
+#toolbar{display:flex;gap:5px;padding:6px 10px;background:#16213e;border-top:1px solid #0d1117;flex-shrink:0;flex-wrap:wrap;align-items:center}
+#toolbar input[type=text]{padding:4px 8px;background:#0f1629;color:#eee;border:1px solid #2a3a5c;border-radius:5px;font:12px system-ui;width:220px}
+#toolbar input[type=text]:focus{border-color:#4488cc;outline:none}
+#toolbar button{padding:4px 10px;background:#243456;color:#aabbcc;border:1px solid #2a3a5c;border-radius:5px;cursor:pointer;font:12px system-ui;transition:all .15s}
+#toolbar button:hover{background:#2a5a8a;color:#fff;border-color:#4488cc}
+#toolbar button.accent{background:#1a6;color:#fff;border-color:#1a6}
+#toolbar button.accent:hover{background:#2b8}
+#toolbar button.warn{background:#a33;color:#fff;border-color:#a33}
+#toolbar button.warn:hover{background:#c44}
+.sep{width:1px;height:22px;background:#2a3a5c;flex-shrink:0}
+#snap-count{font-size:11px;color:#8899aa;margin-left:auto}
+#gallery{display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:100;overflow-y:auto;padding:20px}
+#gallery.open{display:block}
+#gallery-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
+#gallery-header h2{font-size:16px;color:#eee;font-weight:500}
+#gallery-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
+.snap-card{background:#1a1a2e;border:1px solid #2a3a5c;border-radius:8px;overflow:hidden;cursor:pointer;transition:border-color .15s}
+.snap-card:hover{border-color:#4488cc}
+.snap-card img{width:100%;display:block}
+.snap-card .meta{padding:8px;font-size:11px;color:#8899aa;display:flex;justify-content:space-between}
 </style></head><body>
-<div id="bar">
-<input id="inp" type="text" placeholder="Type text, press Enter to send" style="width:260px" autocomplete="off">
-<button onclick="sendType()">Type</button><div class="sep"></div>
-<button class="key" onclick="sk('Enter')">Enter</button>
-<button class="key" onclick="sk('Tab')">Tab</button>
-<button class="key" onclick="sk('Escape')">Esc</button>
-<button class="key" onclick="sk('Backspace')">Bksp</button>
-<div class="sep"></div>
-<button class="key" onclick="post('/interact',{action:'scroll',dy:-400})">Scroll Up</button>
-<button class="key" onclick="post('/interact',{action:'scroll',dy:400})">Scroll Down</button>
-<span id="status">Connecting...</span>
+<div id="chrome">
+<div id="tabs"></div>
+<div id="nav">
+<button onclick="navBack()" title="Back">&#9664;</button>
+<button onclick="navFwd()" title="Forward">&#9654;</button>
+<button onclick="navReload()" title="Reload">&#8635;</button>
+<input id="urlbar" type="text" value="" spellcheck="false" placeholder="URL">
+<div id="busy-dot"></div><span id="busy-label"></span>
+<button onclick="takeSnap()" title="Screenshot" style="margin-left:6px;font-size:16px">&#128247;</button>
+<button onclick="openGallery()" title="Screenshots" style="font-size:14px">&#128193;</button>
 </div>
-<div id="wrap"><canvas id="c" width="1280" height="800"></canvas></div>
+</div>
+<div id="viewport">
+<canvas id="c" width="1280" height="800"></canvas>
+<canvas id="cursor-layer" width="1280" height="800"></canvas>
+</div>
+<div id="toolbar">
+<input id="inp" type="text" placeholder="Type text, press Enter to send" autocomplete="off">
+<button class="accent" onclick="sendType()">Type</button>
+<div class="sep"></div>
+<button onclick="sk('Enter')">Enter</button>
+<button onclick="sk('Tab')">Tab</button>
+<button onclick="sk('Escape')">Esc</button>
+<button onclick="sk('Backspace')">Bksp</button>
+<div class="sep"></div>
+<button onclick="post('/interact',{action:'scroll',dy:-400})">&#9650; Scroll</button>
+<button onclick="post('/interact',{action:'scroll',dy:400})">&#9660; Scroll</button>
+<span id="snap-count"></span>
+</div>
+<div id="gallery">
+<div id="gallery-header"><h2>Screenshots</h2><button onclick="closeGallery()" style="background:#a33;color:#fff;border:none;padding:6px 14px;border-radius:5px;cursor:pointer">Close</button></div>
+<div id="gallery-grid"></div>
+</div>
 <script>
-const c=document.getElementById('c'),cx=c.getContext('2d'),st=document.getElementById('status'),inp=document.getElementById('inp');
-let vw=1280,vh=800;
+const c=document.getElementById('c'),cx=c.getContext('2d');
+const cl=document.getElementById('cursor-layer'),clx=cl.getContext('2d');
+const urlbar=document.getElementById('urlbar'),inp=document.getElementById('inp');
+const busyDot=document.getElementById('busy-dot'),busyLabel=document.getElementById('busy-label');
+const tabsEl=document.getElementById('tabs'),snapCount=document.getElementById('snap-count');
+let vw=1280,vh=800,clickRings=[],agentCursor=null,lastImg=null;
+
 async function post(u,d){return fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)})}
-async function refresh(){try{const r=await fetch('/shot');if(!r.ok)throw 0;const b=await r.blob(),img=await createImageBitmap(b);
-vw=img.width;vh=img.height;c.width=vw;c.height=vh;cx.drawImage(img,0,0);st.textContent='Live'}catch{st.textContent='Disconnected'}
-setTimeout(refresh,400)}
-refresh();
-c.addEventListener('click',async e=>{const r=c.getBoundingClientRect();
-const x=Math.round((e.clientX-r.left)/r.width*vw),y=Math.round((e.clientY-r.top)/r.height*vh);
-st.textContent='Click '+x+','+y;await post('/interact',{action:'click',x,y})});
-c.addEventListener('dblclick',async e=>{const r=c.getBoundingClientRect();
-const x=Math.round((e.clientX-r.left)/r.width*vw),y=Math.round((e.clientY-r.top)/r.height*vh);
-st.textContent='Dblclick '+x+','+y;await post('/interact',{action:'dblclick',x,y})});
+
+async function pollState(){
+  try{const r=await fetch('/state');if(!r.ok)return;const s=await r.json();
+    urlbar.value=s.url||'';
+    if(s.busy){busyDot.classList.add('active');busyLabel.textContent='Agent working...';}
+    else{busyDot.classList.remove('active');busyLabel.textContent='';}
+    if(s.lastAction&&s.lastAction.ts){
+      const age=Date.now()-s.lastAction.ts;
+      if(age<3000&&(s.lastAction.action==='click'||s.lastAction.action==='dblclick')){
+        agentCursor={x:s.lastAction.x,y:s.lastAction.y,age};
+      }else agentCursor=null;
+    }else agentCursor=null;
+    let tabHtml='';
+    (s.tabs||[]).forEach(t=>{
+      const u=t.url||'about:blank';const short=u.replace(/^https?:\\/\\//,'').slice(0,30);
+      tabHtml+='<div class="tab'+(t.active?' active':'')+'" onclick="switchTab('+t.i+')" title="'+u.replace(/"/g,'&quot;')+'"><span class="tab-title">'+short+'</span></div>';
+    });
+    tabsEl.innerHTML=tabHtml;
+  }catch{}
+}
+
+async function pollShot(){
+  try{const r=await fetch('/shot');if(!r.ok)throw 0;const b=await r.blob();
+    lastImg=await createImageBitmap(b);vw=lastImg.width;vh=lastImg.height;
+    c.width=vw;c.height=vh;cl.width=vw;cl.height=vh;
+    cx.drawImage(lastImg,0,0);drawOverlay();
+  }catch{}}
+
+function drawOverlay(){
+  clx.clearRect(0,0,cl.width,cl.height);
+  const now=Date.now();
+  clickRings=clickRings.filter(r=>{
+    const age=now-r.t;if(age>1200)return false;
+    const a=1-age/1200;const sz=12+age/30;
+    clx.beginPath();clx.arc(r.x,r.y,sz,0,Math.PI*2);
+    clx.strokeStyle='rgba(255,60,60,'+a+')';clx.lineWidth=2;clx.stroke();
+    return true;
+  });
+  if(agentCursor){
+    const a=Math.max(0,1-agentCursor.age/3000);
+    clx.save();clx.globalAlpha=a;clx.translate(agentCursor.x,agentCursor.y);
+    clx.fillStyle='#4af';clx.beginPath();
+    clx.moveTo(0,0);clx.lineTo(0,20);clx.lineTo(6,15);clx.lineTo(10,22);clx.lineTo(13,20);clx.lineTo(9,13);clx.lineTo(15,11);clx.closePath();
+    clx.fill();clx.strokeStyle='#fff';clx.lineWidth=1;clx.stroke();
+    clx.restore();
+  }
+  if(clickRings.length||agentCursor)requestAnimationFrame(drawOverlay);
+}
+
+async function loop(){await Promise.all([pollState(),pollShot()]);setTimeout(loop,400);}
+loop();
+
+function canvasCoords(e){const r=c.getBoundingClientRect();
+  return{x:Math.round((e.clientX-r.left)/r.width*vw),y:Math.round((e.clientY-r.top)/r.height*vh)};}
+
+c.addEventListener('click',async e=>{const{x,y}=canvasCoords(e);
+  clickRings.push({x,y,t:Date.now()});drawOverlay();await post('/interact',{action:'click',x,y});});
+c.addEventListener('dblclick',async e=>{const{x,y}=canvasCoords(e);
+  clickRings.push({x,y,t:Date.now()});drawOverlay();await post('/interact',{action:'dblclick',x,y});});
 c.addEventListener('wheel',async e=>{e.preventDefault();
-await post('/interact',{action:'scroll',dy:e.deltaY>0?300:-300})},{passive:false});
-async function sendType(){const t=inp.value;if(!t)return;st.textContent='Typing...';
-await post('/interact',{action:'type',text:t});inp.value=''}
-async function sk(k){st.textContent='Key: '+k;await post('/interact',{action:'press',key:k})}
-inp.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();sendType()}});
+  await post('/interact',{action:'scroll',dy:e.deltaY>0?300:-300});},{passive:false});
+
+async function sendType(){const t=inp.value;if(!t)return;await post('/interact',{action:'type',text:t});inp.value='';}
+async function sk(k){await post('/interact',{action:'press',key:k});}
+inp.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();sendType();}});
+urlbar.addEventListener('keydown',async e=>{if(e.key==='Enter'){e.preventDefault();
+  await post('/run',{code:'await goto("'+urlbar.value.replace(/"/g,'\\\\"')+'")'});}});
+
+async function switchTab(i){await post('/run',{code:'tab('+i+')'});}
+async function navBack(){await post('/run',{code:'await page.goBack({timeout:10000}).catch(()=>null)'});}
+async function navFwd(){await post('/run',{code:'await page.goForward({timeout:10000}).catch(()=>null)'});}
+async function navReload(){await post('/run',{code:'await page.reload({timeout:15000}).catch(()=>null)'});}
+
+async function takeSnap(){
+  try{const r=await post('/screenshots/save',{});const j=await r.json();
+    if(j.ok)snapCount.textContent='Saved: '+j.name;else snapCount.textContent='Error saving';}
+  catch{snapCount.textContent='Snap error';}
+  setTimeout(()=>{snapCount.textContent='';},2000);
+}
+async function openGallery(){
+  document.getElementById('gallery').classList.add('open');
+  try{const r=await fetch('/screenshots/list');const j=await r.json();
+    const grid=document.getElementById('gallery-grid');grid.innerHTML='';
+    if(!j.ok||!j.screenshots||!j.screenshots.length){grid.innerHTML='<p style="color:#888">No screenshots yet</p>';return;}
+    j.screenshots.forEach(s=>{
+      const card=document.createElement('div');card.className='snap-card';
+      card.innerHTML='<img src="/screenshots/get?name='+encodeURIComponent(s.name)+'" loading="lazy"><div class="meta"><span>'+s.name+'</span><span>'+Math.round(s.size/1024)+'KB</span></div>';
+      card.onclick=()=>window.open('/screenshots/get?name='+encodeURIComponent(s.name));
+      grid.appendChild(card);});
+  }catch{document.getElementById('gallery-grid').innerHTML='<p style="color:#f66">Failed to load</p>';}}
+function closeGallery(){document.getElementById('gallery').classList.remove('open');}
 </script></body></html>`;
-    res.writeHead(200, { 'Content-Type': 'text/html', 'Content-Length': Buffer.byteLength(html) });
-    return res.end(html);
+    res.writeHead(200, { 'Content-Type': 'text/html', 'Content-Length': Buffer.byteLength(viewHtml) });
+    return res.end(viewHtml);
   }
 
   // ── POST /interact ──────────────────────────────────────────────
@@ -576,11 +729,53 @@ inp.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();sendTy
           case 'scroll':   await p.mouse.wheel(0, body.dy || 300); break;
           default: return jsonRes(res, 400, { ok: false, error: 'Unknown action: ' + body.action });
         }
+        lastAction = { ...body, ts: Date.now() };
         jsonRes(res, 200, { ok: true });
       } catch (e) {
         jsonRes(res, 500, { ok: false, error: trimErr(e) });
       }
     });
+  }
+
+  // ── Screenshots ─────────────────────────────────────────────────
+  const SHOTS_DIR = process.env.SCREENSHOTS_DIR || '/data/screenshots';
+
+  if (path === '/screenshots/save' && req.method === 'POST') {
+    return serial(async () => {
+      try {
+        await ensure();
+        mkdirSync(SHOTS_DIR, { recursive: true });
+        const ts = new Date().toISOString().replace(/[:.]/g, '-');
+        const name = `snap-${ts}.jpg`;
+        const buf = await P().screenshot({ type: 'jpeg', quality: 85 });
+        writeFileSync(join(SHOTS_DIR, name), buf);
+        jsonRes(res, 200, { ok: true, name, size: buf.length });
+      } catch (e) { jsonRes(res, 500, { ok: false, error: trimErr(e) }); }
+    });
+  }
+
+  if (path === '/screenshots/list' && req.method === 'GET') {
+    try {
+      mkdirSync(SHOTS_DIR, { recursive: true });
+      const files = readdirSync(SHOTS_DIR)
+        .filter(f => f.endsWith('.jpg'))
+        .map(f => ({ name: f, size: statSync(join(SHOTS_DIR, f)).size }))
+        .sort((a, b) => b.name.localeCompare(a.name));
+      return jsonRes(res, 200, { ok: true, screenshots: files });
+    } catch (e) { return jsonRes(res, 500, { ok: false, error: trimErr(e) }); }
+  }
+
+  if (path === '/screenshots/get' && req.method === 'GET') {
+    try {
+      const params = new URL(req.url, 'http://x').searchParams;
+      const name = (params.get('name') || '').replace(/[^a-zA-Z0-9._-]/g, '');
+      const fp = join(SHOTS_DIR, name);
+      if (!name || !existsSync(fp)) return jsonRes(res, 404, { ok: false, error: 'Screenshot not found' });
+      const buf = readFileSync(fp);
+      res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Content-Length': buf.length,
+        'Content-Disposition': `inline; filename="${name}"` });
+      return res.end(buf);
+    } catch (e) { return jsonRes(res, 500, { ok: false, error: trimErr(e) }); }
   }
 
   // ── GET /profile/info ───────────────────────────────────────────
@@ -677,7 +872,7 @@ inp.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();sendTy
   // ── 404 ─────────────────────────────────────────────────────────
   jsonRes(res, 404, {
     ok: false,
-    error: 'Not found. Endpoints: POST /run, POST|GET /shot, GET /health, GET /view, POST /interact, /profile/{info,snapshot,load,reset}',
+    error: 'Not found. Endpoints: POST /run, POST|GET /shot, GET /health, GET /state, GET /view, POST /interact, /screenshots/{save,list,get}, /profile/{info,snapshot,load,reset}',
   });
 });
 

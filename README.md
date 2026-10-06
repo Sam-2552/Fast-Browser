@@ -75,9 +75,25 @@ With options:
 { "ok": true, "browser": "open", "pages": 1, "uptime_s": 123 }
 ```
 
+### `GET /state`
+
+Lightweight status for the viewer (no serial lock):
+
+```json
+{
+  "ok": true,
+  "url": "https://example.com/",
+  "tabs": [{ "i": 0, "active": true, "url": "https://example.com/", "title": "..." }],
+  "busy": false,
+  "lastAction": { "action": "click", "x": 640, "y": 400, "ts": 1700000000000 }
+}
+```
+
 ### `GET /view`
 
-Opens a live interactive viewer in your browser. You can see the page, click on elements, type text, scroll, and press keys — all forwarded to the browser inside the container. Use this for login flows, CAPTCHAs, and debugging.
+Full browser viewer with tab bar, address bar, agent cursor overlay, and screenshot capture. You can see the page, click on elements, type text, scroll, and press keys — all forwarded to the browser inside the container. When an agent is running code via `/run`, a pulsing indicator shows "Agent working...". Click locations appear as animated rings, and the agent's last click position shows a blue cursor arrow.
+
+Use this for login flows, CAPTCHAs, and debugging.
 
 ### `POST /interact`
 
@@ -88,6 +104,28 @@ Programmatic mouse/keyboard input (used by `/view` internally, also callable dir
 { "action": "type", "text": "hello" }
 { "action": "press", "key": "Enter" }
 { "action": "scroll", "dy": 300 }
+```
+
+### Screenshots
+
+Capture and retrieve screenshots from the viewer. Stored in `/data/screenshots` (mount a volume to persist).
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/screenshots/save` | POST | Capture current page, save as JPEG |
+| `/screenshots/list` | GET | List all saved screenshots |
+| `/screenshots/get?name=snap-...jpg` | GET | Download a specific screenshot |
+
+```bash
+# Save a screenshot
+curl -X POST http://localhost:9100/screenshots/save
+
+# List all
+curl http://localhost:9100/screenshots/list
+
+# Mount a volume to persist screenshots across container restarts
+docker run -d --name browser -p 9100:9222 \
+  -v browser-screenshots:/data/screenshots fast-browser
 ```
 
 ## Helpers
@@ -247,6 +285,7 @@ Log into the same site with different accounts in each container, then crawl in 
 | `API_KEY` | _(none)_ | Set to require `Authorization: Bearer <key>` |
 | `PROFILE_DIR` | `/data/profile` | Browser profile directory |
 | `PROFILE_SEED` | _(none)_ | Path to a tar.gz profile snapshot — extracted on first startup if profile dir is empty |
+| `SCREENSHOTS_DIR` | `/data/screenshots` | Directory for saved screenshots |
 | `CHROME_BIN` | auto-detected | Path to Chromium/Chrome binary |
 
 ## Examples
@@ -292,11 +331,13 @@ return data;
 │   Codex,     │   JSON result    │                               │
 │   Python,    │                  │  Persistent browser session   │
 │   curl)      │                  │  vm-based code execution      │
-└─────────────┘                  │  Profile dir: /data/profile   │
+└─────────────┘                  │  Profile: /data/profile       │
+                                 │  Snaps:   /data/screenshots   │
                                  └──────────────┬───────────────┘
 ┌─────────────┐  GET /view                      │
 │  Human      │ ←───────────────────────────────┘
-│  (browser)  │  Live viewer: see, click, type
+│  (browser)  │  Full browser: tabs, URL bar,
+│             │  agent cursor, screenshot gallery
 └─────────────┘
 ```
 

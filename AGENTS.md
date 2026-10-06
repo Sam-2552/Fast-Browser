@@ -152,8 +152,9 @@ The default port is `9222`. If multiple instances are running, each is on a diff
 
 ## Seeing the browser
 
-- **Live viewer**: Tell the user to open `http://localhost:<port>/view` in their browser. They can see the page, click, type, and scroll — useful for login and debugging.
+- **Live viewer**: Tell the user to open `http://localhost:<port>/view` in their browser. Full browser chrome: tab bar, address bar, agent cursor showing live interactions, busy indicator when you're running code, and a screenshot capture button. Useful for login and debugging.
 - **Screenshot**: Call `GET /shot` to get a JPEG screenshot, or use `return await shot()` in your code. Save it to disk to inspect.
+- **Screenshot gallery**: Call `POST /screenshots/save` to capture the current view. Call `GET /screenshots/list` to see all saved screenshots. Stored in `/data/screenshots`.
 
 ## Core rule: batch your actions
 
@@ -294,6 +295,14 @@ Navigate to the next page with `goto()` or open a new tab with `newTab(url)`. Th
 - `page.waitForResponse(pattern)` — wait for network
 - `page.route(pattern, handler)` — intercept requests
 - `fetch(url)` — server-side HTTP (not through browser)
+
+### Screenshots (HTTP, not code helpers)
+- `POST /screenshots/save` → captures current page as JPEG, returns `{name, size}`
+- `GET /screenshots/list` → `{screenshots: [{name, size}, ...]}`
+- `GET /screenshots/get?name=<file>` → JPEG image bytes
+
+### State (HTTP, not code helpers)
+- `GET /state` → `{url, tabs: [{i, active, url}], busy, lastAction}` — lightweight, no lock
 
 ### Profile endpoints (HTTP, not code helpers)
 - `GET /profile/info` → `{cookies, domains, profile_bytes}`
