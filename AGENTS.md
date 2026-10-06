@@ -2,9 +2,16 @@
 
 You are an AI agent. This file tells you how to use `fast-browser`, a browser you control over HTTP. Read this entire file before your first browser call.
 
+## Important rules
+
+1. **Do not read or modify `server.mjs`.** It is a black box. Everything you need is in this file.
+2. **Do not run `npm install` unless you are starting headed mode.** Docker containers have everything built in.
+3. **Never ask the user for passwords.** Use headed mode and let them type credentials visually. See "Login and authentication" below.
+4. **Repo location:** `D:\github\fast-browser`. Use this path when you need to build the Docker image or start headed mode.
+
 ## Starting the server
 
-**Always use Docker. Do not run `npm install` or `node server.mjs` directly.** The Docker image has Chromium built in — no local dependencies needed.
+**Default: use Docker.** The Docker image has Chromium built in — no local dependencies needed.
 
 ### Check if the image exists
 
@@ -60,19 +67,23 @@ Headed mode requires `npm install` once in the repo, then:
 
 **Windows:**
 ```cmd
-set HEADED=1 && set PORT=9222 && node server.mjs
+cd /d D:\github\fast-browser
+set HEADED=1 && set PORT=9222 && set PROFILE_DIR=D:\github\fast-browser\profile-local && node server.mjs
 ```
 
 **Linux/macOS:**
 ```bash
-HEADED=1 PORT=9222 node server.mjs
+cd D:/github/fast-browser
+HEADED=1 PORT=9222 PROFILE_DIR=./profile-local node server.mjs
 ```
 
-A Chrome window opens. The API is identical to Docker — same port, same endpoints. After the user logs in visually, the session is saved to the local profile and persists across restarts.
+**You must set `PROFILE_DIR`** to a dedicated directory (e.g., `D:\github\fast-browser\profile-local`). If you omit it, the server may use Chrome's default profile, which conflicts with any Chrome window the user already has open and causes errors like "Chrome is conflicting with an existing session."
+
+A Chrome window opens. The API is identical to Docker — same port, same endpoints. After the user logs in visually, the session is saved to `PROFILE_DIR` and persists across restarts.
 
 To run headed on a different port (alongside Docker containers):
 ```cmd
-set HEADED=1 && set PORT=9200 && node server.mjs
+set HEADED=1 && set PORT=9200 && set PROFILE_DIR=D:\github\fast-browser\profile-9200 && node server.mjs
 ```
 
 ## Login and authentication
@@ -86,8 +97,8 @@ set HEADED=1 && set PORT=9200 && node server.mjs
 5. The session (cookies, localStorage) is now saved in the profile and persists.
 
 For Docker containers that need an authenticated session:
-1. Log in once using a headed local instance with a named profile directory.
-2. Copy that profile into the Docker volume: `docker cp ./profile-local/. browser:/data/profile/`
+1. Log in once using headed mode with `PROFILE_DIR=D:\github\fast-browser\profile-local` (see headed mode above).
+2. Copy that profile into the Docker volume: `docker cp D:\github\fast-browser\profile-local\. browser:/data/profile/`
 3. Restart the container: `docker restart browser`
 
 **If you encounter a login page in a headless Docker container**, do not attempt to fill credentials programmatically. Tell the user you need headed mode for login and switch to it.
