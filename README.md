@@ -189,6 +189,46 @@ await page.route('**/ads/**', route => route.abort())
 await page.evaluate(() => document.title)
 ```
 
+## Profiles
+
+Every container starts with a fresh, empty profile. Use the profile API to export, import, and share login sessions between containers.
+
+### Profile endpoints
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/profile/info` | GET | Cookie count, logged-in domains, profile size |
+| `/profile/snapshot` | GET | Export current profile as tar.gz binary |
+| `/profile/load` | POST | Import a tar.gz profile, restart browser with it |
+| `/profile/reset` | POST | Wipe profile, restart with clean slate |
+
+### Login once, share everywhere
+
+```bash
+# 1. Start headed, let the user log in visually
+HEADED=1 PORT=9222 PROFILE_DIR=./profile-local node server.mjs
+
+# 2. Export the authenticated profile
+curl http://localhost:9222/profile/snapshot -o session.tar.gz
+
+# 3. Load into Docker workers
+for port in 9100 9101 9102; do
+  curl -X POST http://localhost:$port/profile/load \
+    -H "Content-Type: application/gzip" --data-binary @session.tar.gz
+done
+```
+
+### Auto-seed on startup
+
+Boot containers with a pre-loaded profile:
+
+```bash
+docker run -d --name browser -p 9100:9222 \
+  -v ./session.tar.gz:/seed/profile.tar.gz \
+  -e PROFILE_SEED=/seed/profile.tar.gz \
+  fast-browser
+```
+
 ## Multiple sessions
 
 One container = one browser profile. Spin up many for parallel work:
@@ -211,6 +251,7 @@ Log into the same site with different accounts in each container, then crawl in 
 | `API_KEY` | _(none)_ | Set to require `Authorization: Bearer <key>` |
 | `HEADED` | `0` | Set to `1` for a visible browser window (local dev) |
 | `PROFILE_DIR` | `/data/profile` | Browser profile directory |
+| `PROFILE_SEED` | _(none)_ | Path to a tar.gz profile snapshot — extracted on first startup if profile dir is empty |
 | `CHROME_BIN` | auto-detected | Path to Chromium/Chrome binary |
 
 ## Local development (without Docker)

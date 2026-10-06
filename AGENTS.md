@@ -71,19 +71,22 @@ cd /d D:\github\fast-browser
 set HEADED=1 && set PORT=9222 && set PROFILE_DIR=D:\github\fast-browser\profile-local && node server.mjs
 ```
 
-**Linux/macOS:**
+**macOS/Linux:**
 ```bash
-cd D:/github/fast-browser
+cd /path/to/fast-browser
 HEADED=1 PORT=9222 PROFILE_DIR=./profile-local node server.mjs
 ```
 
-**You must set `PROFILE_DIR`** to a dedicated directory (e.g., `D:\github\fast-browser\profile-local`). If you omit it, the server may use Chrome's default profile, which conflicts with any Chrome window the user already has open and causes errors like "Chrome is conflicting with an existing session."
+**You must set `PROFILE_DIR`** to a dedicated directory inside the repo (e.g., `./profile-local`). If you omit it, the server defaults to `/data/profile` which doesn't exist outside Docker, or may conflict with an existing Chrome session. Each headed instance should use its own profile directory.
 
 A Chrome window opens. The API is identical to Docker — same port, same endpoints. After the user logs in visually, the session is saved to `PROFILE_DIR` and persists across restarts.
 
 To run headed on a different port (alongside Docker containers):
-```cmd
-set HEADED=1 && set PORT=9200 && set PROFILE_DIR=D:\github\fast-browser\profile-9200 && node server.mjs
+```bash
+# Windows:
+set HEADED=1 && set PORT=9200 && set PROFILE_DIR=.\profile-9200 && node server.mjs
+# macOS/Linux:
+HEADED=1 PORT=9200 PROFILE_DIR=./profile-9200 node server.mjs
 ```
 
 ## Login and authentication
@@ -94,14 +97,80 @@ set HEADED=1 && set PORT=9200 && set PROFILE_DIR=D:\github\fast-browser\profile-
 2. Navigate to the login page: `POST /run {"code": "await goto('https://target.com/login')"}`
 3. Tell the user: "The login page is open in the browser window. Please sign in, then let me know when you're done."
 4. Wait for the user to confirm.
-5. The session (cookies, localStorage) is now saved in the profile and persists.
+5. The session is now saved in the profile.
 
-For Docker containers that need an authenticated session:
-1. Log in once using headed mode with `PROFILE_DIR=D:\github\fast-browser\profile-local` (see headed mode above).
-2. Copy that profile into the Docker volume: `docker cp D:\github\fast-browser\profile-local\. browser:/data/profile/`
-3. Restart the container: `docker restart browser`
+To transfer the login to Docker containers, use profile snapshot/load (see "Profiles" below):
+```bash
+curl http://localhost:9222/profile/snapshot -o session.tar.gz
+curl -X POST http://localhost:9100/profile/load -H "Content-Type: application/gzip" --data-binary @session.tar.gz
+```
 
 **If you encounter a login page in a headless Docker container**, do not attempt to fill credentials programmatically. Tell the user you need headed mode for login and switch to it.
+
+## Profiles
+
+Every container starts with a **fresh, empty profile** by default — no cookies, no localStorage, nothing.
+
+### Check profile status
+
+```bash
+curl http://localhost:9222/profile/info
+# {"ok":true,"cookies":0,"domains":[],"profile_bytes":0}
+```
+
+### Export a profile (snapshot)
+
+After logging in or building up session state, export it:
+
+```bash
+curl http://localhost:9222/profile/snapshot -o session.tar.gz
+```
+
+The browser pauses briefly while the snapshot is taken, then resumes automatically.
+
+### Import a profile (load)
+
+Load a previously exported snapshot into any container:
+
+```bash
+curl -X POST http://localhost:9100/profile/load \
+  -H "Content-Type: application/gzip" --data-binary @session.tar.gz
+# {"ok":true,"message":"Profile loaded","cookies":42}
+```
+
+The browser restarts with the imported profile. All cookies and localStorage from the snapshot are now active.
+
+### Share one login across many containers
+
+```bash
+# 1. Snapshot the authenticated container (headed or Docker)
+curl http://localhost:9222/profile/snapshot -o session.tar.gz
+
+# 2. Load into every worker
+curl -X POST http://localhost:9100/profile/load -H "Content-Type: application/gzip" --data-binary @session.tar.gz
+curl -X POST http://localhost:9101/profile/load -H "Content-Type: application/gzip" --data-binary @session.tar.gz
+curl -X POST http://localhost:9102/profile/load -H "Content-Type: application/gzip" --data-binary @session.tar.gz
+```
+
+**Note:** Session cookies (no expiry date) are lost during snapshot because the browser must close to flush state. Persistent cookies, localStorage, and IndexedDB all survive. Profile snapshots are cross-platform — a profile created on macOS works in a Linux Docker container and vice versa.
+
+### Wipe profile and start over
+
+```bash
+curl -X POST http://localhost:9222/profile/reset
+# {"ok":true,"message":"Profile reset to clean state"}
+```
+
+### Auto-seed on startup (Docker Compose / orchestration)
+
+Boot a container with a pre-loaded profile — no API calls needed:
+
+```bash
+docker run -d --name browser -p 9100:9222 \
+  -v ./session.tar.gz:/seed/profile.tar.gz \
+  -e PROFILE_SEED=/seed/profile.tar.gz \
+  fast-browser
+```
 
 ## Connection
 
@@ -258,6 +327,12 @@ Navigate to the next page with `goto()` or open a new tab with `newTab(url)`. Th
 - `page.waitForResponse(pattern)` — wait for network
 - `page.route(pattern, handler)` — intercept requests
 - `fetch(url)` — server-side HTTP (not through browser)
+
+### Profile endpoints (HTTP, not code helpers)
+- `GET /profile/info` → `{cookies, domains, profile_bytes}`
+- `GET /profile/snapshot` → binary tar.gz of the profile directory
+- `POST /profile/load` (body: tar.gz binary) → replaces profile, restarts browser
+- `POST /profile/reset` → wipes profile, restarts with clean state
 
 ## Error handling
 

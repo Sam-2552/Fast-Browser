@@ -6,7 +6,9 @@
 
 import http from 'node:http';
 import vm from 'node:vm';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, statSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { execSync } from 'node:child_process';
 import { chromium } from 'playwright-core';
 
 // ── Config ──────────────────────────────────────────────────────────
@@ -44,6 +46,24 @@ let conRing = [];
 let blocked = new Set();
 
 const P = () => pages[pi]; // current page shorthand
+
+function clearDir(dir) {
+  try {
+    for (const f of readdirSync(dir)) rmSync(join(dir, f), { recursive: true, force: true });
+  } catch {}
+}
+
+function dirSize(dir) {
+  let total = 0;
+  try {
+    for (const ent of readdirSync(dir, { withFileTypes: true, recursive: true })) {
+      if (ent.isFile()) {
+        try { total += statSync(join(ent.parentPath ?? ent.path ?? dir, ent.name)).size; } catch {}
+      }
+    }
+  } catch {}
+  return total;
+}
 
 // ── Browser lifecycle ───────────────────────────────────────────────
 let launching = null;
@@ -100,6 +120,18 @@ function wire(p) {
     if (i >= 0) pages.splice(i, 1);
     if (pi >= pages.length) pi = Math.max(0, pages.length - 1);
   });
+}
+
+async function restartBrowser() {
+  if (ctx) { try { await ctx.close(); } catch {} }
+  ctx = null;
+  pages = [];
+  pi = 0;
+  netRing = [];
+  conRing = [];
+  blocked = new Set();
+  launching = null;
+  await ensure();
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
@@ -375,6 +407,20 @@ function readBody(req) {
   });
 }
 
+function readBodyBin(req, max = 200e6) {
+  return new Promise((ok, no) => {
+    const chunks = [];
+    let total = 0;
+    req.on('data', c => {
+      total += c.length;
+      if (total > max) { req.destroy(); return no(new Error(`Body too large (>${Math.round(max / 1e6)}MB)`)); }
+      chunks.push(c);
+    });
+    req.on('end', () => ok(Buffer.concat(chunks)));
+    req.on('error', no);
+  });
+}
+
 function jsonRes(res, code, obj) {
   const b = JSON.stringify(obj);
   res.writeHead(code, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(b) });
@@ -450,16 +496,122 @@ const server = http.createServer((req, res) => {
     });
   }
 
+  // ── GET /profile/info ───────────────────────────────────────────
+  if (path === '/profile/info' && req.method === 'GET') {
+    return serial(async () => {
+      try {
+        await ensure();
+        const ck = await ctx.cookies();
+        const domains = [...new Set(ck.map(c => c.domain.replace(/^\./, '')))];
+        jsonRes(res, 200, {
+          ok: true, cookies: ck.length, domains,
+          profile_bytes: dirSize(PROFILE),
+        });
+      } catch (e) { jsonRes(res, 500, { ok: false, error: trimErr(e) }); }
+    });
+  }
+
+  // ── GET /profile/snapshot ───────────────────────────────────────
+  if (path === '/profile/snapshot' && req.method === 'GET') {
+    return serial(async () => {
+      try {
+        await ensure();
+        if (ctx) { try { await ctx.close(); } catch {} }
+        ctx = null; pages = []; pi = 0; launching = null;
+
+        const tmp = resolve(PROFILE, '..', 'profile-snapshot.tar.gz');
+        execSync(`tar -czf "${tmp}" -C "${PROFILE}" .`, { timeout: 30000 });
+        const buf = readFileSync(tmp);
+        rmSync(tmp, { force: true });
+
+        await ensure();
+
+        res.writeHead(200, {
+          'Content-Type': 'application/gzip',
+          'Content-Disposition': 'attachment; filename="profile.tar.gz"',
+          'Content-Length': buf.length,
+        });
+        res.end(buf);
+      } catch (e) {
+        try { await ensure(); } catch {}
+        jsonRes(res, 500, { ok: false, error: trimErr(e) });
+      }
+    });
+  }
+
+  // ── POST /profile/load ─────────────────────────────────────────
+  if (path === '/profile/load' && req.method === 'POST') {
+    return serial(async () => {
+      try {
+        const buf = await readBodyBin(req);
+        if (!buf.length) return jsonRes(res, 400, { ok: false, error: 'Empty body — send a tar.gz profile snapshot' });
+
+        if (ctx) { try { await ctx.close(); } catch {} }
+        ctx = null; pages = []; pi = 0; launching = null;
+        await new Promise(r => setTimeout(r, 300));
+
+        clearDir(PROFILE);
+
+        const tmp = resolve(PROFILE, '..', 'profile-upload.tar.gz');
+        writeFileSync(tmp, buf);
+        execSync(`tar -xzf "${tmp}" -C "${PROFILE}"`, { timeout: 30000 });
+        rmSync(tmp, { force: true });
+
+        await ensure();
+        const ck = await ctx.cookies();
+        jsonRes(res, 200, { ok: true, message: 'Profile loaded', cookies: ck.length });
+      } catch (e) {
+        try { await ensure(); } catch {}
+        jsonRes(res, 500, { ok: false, error: trimErr(e) });
+      }
+    });
+  }
+
+  // ── POST /profile/reset ────────────────────────────────────────
+  if (path === '/profile/reset' && req.method === 'POST') {
+    return serial(async () => {
+      try {
+        if (ctx) { try { await ctx.close(); } catch {} }
+        ctx = null; pages = []; pi = 0; launching = null;
+        await new Promise(r => setTimeout(r, 300));
+
+        clearDir(PROFILE);
+        store = {}; sandbox.store = store;
+
+        await ensure();
+        jsonRes(res, 200, { ok: true, message: 'Profile reset to clean state' });
+      } catch (e) {
+        try { await ensure(); } catch {}
+        jsonRes(res, 500, { ok: false, error: trimErr(e) });
+      }
+    });
+  }
+
   // ── 404 ─────────────────────────────────────────────────────────
   jsonRes(res, 404, {
     ok: false,
-    error: 'Not found. Endpoints: POST /run, POST|GET /shot, GET /health',
+    error: 'Not found. Endpoints: POST /run, POST|GET /shot, GET /health, /profile/{info,snapshot,load,reset}',
   });
 });
 
 // ── Start ───────────────────────────────────────────────────────────
 server.listen(PORT, () => {
   process.stderr.write(`fast-browser :${PORT}  chrome=${CHROME}  profile=${PROFILE}\n`);
+
+  // Seed profile from tar.gz on first startup
+  const seed = process.env.PROFILE_SEED || '';
+  if (seed) {
+    try {
+      mkdirSync(PROFILE, { recursive: true });
+      if (readdirSync(PROFILE).length === 0 && existsSync(seed)) {
+        execSync(`tar -xzf "${seed}" -C "${PROFILE}"`, { timeout: 30000 });
+        process.stderr.write(`Seeded profile from ${seed}\n`);
+      }
+    } catch (e) {
+      process.stderr.write(`Profile seed failed: ${e.message}\n`);
+    }
+  }
+
   // Eager browser launch — ready for the first request
   ensure().catch(e => process.stderr.write(`browser deferred: ${e.message}\n`));
 });
