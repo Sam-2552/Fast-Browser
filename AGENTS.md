@@ -4,7 +4,7 @@ You are an AI agent. This file tells you how to use `fast-browser`, a browser yo
 
 ## Important rules
 
-1. **Do not read or modify `server.mjs`.** It is a black box. Everything you need is in this file.
+1. **Do not read or modify `server.mjs` or `decider/server.mjs`.** They are black boxes. Everything you need is in this file.
 2. **Do not run `npm install` or `node server.mjs` locally.** Everything runs in Docker containers.
 3. **Never ask the user for passwords.** Direct them to the live viewer URL and let them type credentials there. See "Login and authentication" below.
 4. **Repo location:** `D:\github\fast-browser`. Use this path when you need to build the Docker image.
@@ -55,6 +55,14 @@ curl http://localhost:9222/health
 ```
 
 If the container already exists but is stopped: `docker start browser`
+
+### Browser + decider together (Docker Compose)
+
+```bash
+docker compose up -d --build
+```
+
+Starts the browser on `localhost:9222` and the decision service on `localhost:9300`. See "Decisions: the decider service" below.
 
 ## Login and authentication
 
@@ -366,6 +374,102 @@ POST /run  {"code": "await goto('https://unknown-site.com'); return await snap()
 // Now you know the refs — use them
 POST /run  {"code": "await click(3); await fill(7, 'data'); return await text('.result')"}
 ```
+
+## Decisions: the decider service (optional)
+
+The decider is a second container that answers **decisions** with a decision model (Jev, LiquidAI d1, or a self-hosted Strands Decider) instead of your own LLM. A decision is a pick from options you already have: which element, which tool, which action, yes or no, a rating. The model scores every option in one forward pass and generates no tokens, so an answer takes about 0.1–0.5 s.
+
+Keep using your own LLM for anything that produces text: values to type, code for `/run`, plans, summaries. The decider only picks.
+
+### Start it
+
+```bash
+cd D:\github\fast-browser
+docker compose up -d --build
+curl http://localhost:9300/health
+# {"ok":true,"model":"jev-latest","key_set":true,...}
+```
+
+If `key_set` is `false`, ask the user to add `SYSTEMONE_KEY=<their key>` to `D:\github\fast-browser\.env` and run `docker compose up -d` again. Never ask for the key in chat.
+
+### `POST /decide`: any decision
+
+Send the situation as `state` and one or more named questions. One call answers them all.
+
+```bash
+curl -s -X POST http://localhost:9300/decide -H "Content-Type: application/json" -d '{
+  "state": "User asked: what does the Vercel Pro plan cost?",
+  "questions": {
+    "tool":  {"type": "choice", "instructions": "Which tool answers this best?",
+              "criteria": {"search": "web search", "browse": "open a known URL", "files": "read local files"}},
+    "clear": {"type": "noul", "instructions": "Is the request specific enough to act on?"},
+    "odds":  {"type": "score", "instructions": "How likely is the browser to find the answer?",
+              "criteria": ["unlikely", "maybe", "very likely"]}
+  }
+}'
+```
+
+```json
+{"ok": true,
+ "answers": {
+   "tool":  {"type": "choice", "choice": "search", "confidence": 0.97, "probabilities": {"search": 0.98, "browse": 0.01, "files": 0.01}},
+   "clear": {"type": "noul", "noul": 0.93},
+   "odds":  {"type": "score", "score": 1.6, "confidence": 0.71, "probabilities": {"0": 0.05, "1": 0.3, "2": 0.65}}
+ },
+ "usage": {"input_tokens": 96, "output_tokens": 0}, "elapsed_ms": 210}
+```
+
+| Type | `criteria` | Answer |
+|---|---|---|
+| `choice` | `{"key": "description"}`, 2–255 options | `choice` (one of your keys), `confidence`, `probabilities` |
+| `noul` | not needed | `noul`: probability the answer is yes |
+| `score` | ordered list of 2–10 levels, lowest first | `score`: level index, fractional (1.6 = between levels 1 and 2) |
+
+`confidence` runs from 0 (options evenly matched) to 1 (one option takes all the probability).
+
+### `POST /step`: pick an element and act on it
+
+One call runs `snap()` on the current page, asks the model which element fits your goal, performs the action on it, and returns the page's elements afterwards.
+
+```bash
+curl -s -X POST http://localhost:9300/step -H "Content-Type: application/json" \
+  -d '{"goal": "Open the sign-in form", "action": "click"}'
+```
+
+```json
+{"ok": true, "executed": true, "ref": 4, "element": "button \"Sign in\"", "action": "click",
+ "confidence": 0.85, "decision_usage": {"input_tokens": 199, "output_tokens": 0},
+ "snap_after": "[1] input[email] \"Email\"\n[2] input[password] \"Password\"\n...\n[tab 1/1] Sign in | https://example.com/login",
+ "elapsed_ms": 340}
+```
+
+| Field | Default | |
+|---|---|---|
+| `goal` | required | What you want done, in plain words |
+| `action` | `click` | `click`, `dblclick`, `hover`, `focus`, `check`, `uncheck`, `fill`, `type`, `select` |
+| `value` | | Required for `fill`, `type`, `select`. You write it. It goes only to the browser, never to the decision model |
+| `min_confidence` | `0.5` | Below this, nothing is performed. Use `0.9` for actions you can't undo (submit, pay, delete) |
+| `snap_opts` | `{}` | Passed to `snap()`, e.g. `{"limit": 60}` |
+
+`/step` acts on whatever page is open. Navigate first with `/run`.
+
+**When `ok` is `false`, nothing was performed.** Read `error`:
+- `Low confidence (...)`: the model wasn't sure. `candidates` lists the top three refs with probabilities. Pick one yourself and `click(ref)` through `/run` (the refs are current), or retry with a more specific goal.
+- `No element on the page fits the goal`: the target isn't on the page. Scroll, navigate, or rethink.
+- `Browser: ...`: the action failed in the browser, same as a `/run` error.
+
+### What leaves the machine
+
+`/step` sends the page's element list to the decision provider. Before it does, it masks the values of fields labelled like password, PIN, OTP, card, CVV, SSN, secret or token as `***`, and drops text a page has hidden in a field value to impersonate another element. `snap_after` is cleaned the same way. To keep page content on the machine, use the self-hosted Strands model (README, "Decider").
+
+### Which endpoint
+
+| Situation | Use |
+|---|---|
+| You know the selector or ref | `/run` |
+| Unfamiliar page, one action at a time | `/step` |
+| A choice that isn't a page element (tool, branch, yes/no, rating) | `/decide` |
+| Anything that needs text written | your own LLM |
 
 ## Timeouts
 

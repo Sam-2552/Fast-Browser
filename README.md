@@ -277,6 +277,109 @@ done
 
 Log into the same site with different accounts in each container, then crawl in parallel.
 
+## Decider: decision models (optional)
+
+Much of what an agent does in a browser is choosing: which element to click, which tool to call, whether a page is ready. An LLM makes each choice by generating text, which is slow and costs output tokens. A decision model scores a fixed set of options in one forward pass, generates nothing, and answers in about 100–500 ms.
+
+`decider/` puts a decision model behind HTTP so any agent or LLM can use it. Jev, LiquidAI d1 and Strands Decider all speak the same SystemOne protocol, so switching between them is configuration only. The LLM keeps the work that needs text (form values, `/run` code, plans); the decider takes the picks.
+
+```
+agent ── POST /decide ──→ decider ── SystemOne ──→ Jev · LiquidAI d1 · Strands
+agent ── POST /step ────→ decider ── POST /run ──→ fast-browser
+agent ── POST /run ──────────────────────────────→ fast-browser   (direct, unchanged)
+```
+
+| Endpoint | Does |
+|---|---|
+| `POST /decide` | Any decision: `choice`, `noul` (yes/no), `score`. Several questions per call |
+| `POST /step` | `snap()` → the model picks the element for your goal → performs the action → returns the new snapshot |
+| `GET /health` | Model, provider URL, whether a key is set |
+
+### Run it
+
+```bash
+echo SYSTEMONE_KEY=your-key > .env      # .env is gitignored
+docker compose up -d --build
+curl http://localhost:9300/health
+```
+
+Compose starts the browser on `localhost:9222` (this image, with profile and screenshot volumes) and the decider on `localhost:9300`. Both ports bind to localhost only.
+
+### Providers
+
+| Provider | `.env` |
+|---|---|
+| Jev (default) | `SYSTEMONE_KEY=...` |
+| LiquidAI d1 | `SYSTEMONE_URL=https://api.liquid.ai/decisions/v1/systemone`<br>`SYSTEMONE_MODEL=d1:free`<br>`SYSTEMONE_KEY=...` |
+| Strands Decider (self-hosted) | `COMPOSE_PROFILES=strands`<br>`SYSTEMONE_URL=http://strands:8000/v1/systemone`<br>`SYSTEMONE_MODEL=strands-decider` |
+
+[Strands Decider](https://github.com/strands-labs/strands-decider) is an Apache 2.0 model that runs in its own container (`decider/strands.Dockerfile`, CPU). The first start downloads the 2B model (several GB) into the `strands-models` volume; watch it with `docker compose logs -f strands`. Decisions are slower on CPU than through the hosted APIs, so raise `TIMEOUT_MS` if you see 504s. Page content never leaves your machine.
+
+### `POST /decide`
+
+```bash
+curl -X POST http://localhost:9300/decide -H 'Content-Type: application/json' -d '{
+  "state": "User asked: what does the Vercel Pro plan cost?",
+  "questions": {
+    "tool":  {"type": "choice", "instructions": "Which tool answers this best?",
+              "criteria": {"search": "web search", "browse": "open a known URL", "files": "read local files"}},
+    "clear": {"type": "noul", "instructions": "Is the request specific enough to act on?"}
+  }
+}'
+```
+
+```json
+{"ok": true,
+ "answers": {"tool":  {"type": "choice", "choice": "search", "confidence": 0.97, "probabilities": {...}},
+             "clear": {"type": "noul", "noul": 0.93}},
+ "usage": {"input_tokens": 61, "output_tokens": 0}, "elapsed_ms": 190}
+```
+
+`score` questions take `criteria` as an ordered list of 2–10 levels and return a fractional `score`. The body is passed through to the provider, so a per-request `model` or provider-specific fields work.
+
+### `POST /step`
+
+```bash
+curl -X POST http://localhost:9300/step -H 'Content-Type: application/json' \
+  -d '{"goal": "Search for wireless keyboards", "action": "fill", "value": "wireless keyboard"}'
+```
+
+| Field | Default | Description |
+|---|---|---|
+| `goal` | required | What to do, in plain words |
+| `action` | `click` | `click` `dblclick` `hover` `focus` `check` `uncheck` `fill` `type` `select` |
+| `value` | | For `fill` / `type` / `select`. Sent to the browser only, never to the provider |
+| `min_confidence` | `0.5` | Below this, the action is skipped. Use `0.9` for actions you can't undo |
+| `snap_opts` | `{}` | Passed to `snap()` |
+
+On success the response has `ref`, `element`, `confidence`, and `snap_after` (the page after the action). `ok: false` always means nothing was performed:
+- **Low confidence**: `candidates` lists the top three refs so the agent can choose.
+- **No element fits**: the model chose the built-in "none of these" option.
+- **Browser error**: the action failed in fast-browser.
+
+### Safety
+
+- Ports bind to `127.0.0.1`. The decider sends no CORS headers and only accepts `application/json` POSTs, so web pages open in your own browser can't call it.
+- Before page state goes to the provider, values of password, PIN, OTP, card, CVV, SSN, secret and token fields are masked. `snap_after` is masked the same way.
+- Snapshot lines are parsed strictly in order, so text hidden in a field value can't impersonate another element. A ref that such text collides with is dropped.
+- Low-confidence picks are not executed, and the model can answer "none".
+
+### Decider environment variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `SYSTEMONE_URL` | `https://api.typesafe.ai/v1/systemone` | Decision endpoint (full URL) |
+| `SYSTEMONE_MODEL` | `jev-latest` | Model sent with each request |
+| `SYSTEMONE_KEY` | _(none)_ | Provider API key, sent as a Bearer token |
+| `CONFIDENCE_MIN` | `0.5` | Default `min_confidence` for `/step` |
+| `TIMEOUT_MS` | `15000` | Timeout for each upstream call |
+| `BROWSER_URL` | `http://browser:9222` | fast-browser that `/step` drives |
+| `BROWSER_KEY` | _(none)_ | fast-browser's `API_KEY`, if it has one |
+| `API_KEY` | _(none)_ | Require `Authorization: Bearer <key>` on `/decide` and `/step` |
+| `PORT` | `9300` | HTTP port |
+
+Compose reads the first five from `.env`, plus `BROWSER_PORT` (default 9222), `DECIDER_PORT` (default 9300) and `COMPOSE_PROFILES`. `BROWSER_KEY`, `API_KEY` and `PORT` apply when you run the decider image directly or add them to `docker-compose.yml`.
+
 ## Environment variables
 
 | Variable | Default | Description |

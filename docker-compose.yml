@@ -1,0 +1,35 @@
+# fast-browser + decider. Put SYSTEMONE_KEY and any overrides in a .env file next to this one.
+# Ports bind to localhost only: /run executes arbitrary code and the decider spends your API key.
+services:
+  browser:
+    build: .
+    ports: ["127.0.0.1:${BROWSER_PORT:-9222}:9222"]
+    volumes:
+      - browser-profile:/data/profile
+      - browser-screenshots:/data/screenshots
+
+  decider:
+    build: ./decider
+    ports: ["127.0.0.1:${DECIDER_PORT:-9300}:9300"]
+    environment:
+      BROWSER_URL: http://browser:9222
+      SYSTEMONE_URL: ${SYSTEMONE_URL:-https://api.typesafe.ai/v1/systemone}
+      SYSTEMONE_MODEL: ${SYSTEMONE_MODEL:-jev-latest}
+      SYSTEMONE_KEY: ${SYSTEMONE_KEY:-}
+      CONFIDENCE_MIN: ${CONFIDENCE_MIN:-0.5}
+      TIMEOUT_MS: ${TIMEOUT_MS:-15000}
+    depends_on: [browser]
+
+  # Optional self-hosted decision model: COMPOSE_PROFILES=strands
+  strands:
+    profiles: [strands]
+    build:
+      context: ./decider
+      dockerfile: strands.Dockerfile
+    volumes:
+      - strands-models:/models
+
+volumes:
+  browser-profile:
+  browser-screenshots:
+  strands-models:
