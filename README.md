@@ -281,10 +281,10 @@ Log into the same site with different accounts in each container, then crawl in 
 
 Much of what an agent does in a browser is choosing: which element to click, which tool to call, whether a page is ready. An LLM makes each choice by generating text, which is slow and costs output tokens. A decision model scores a fixed set of options in one forward pass, generates nothing, and answers in about 100–500 ms.
 
-`decider/` puts a decision model behind HTTP so any agent or LLM can use it. Jev, LiquidAI d1 and Strands Decider all speak the same SystemOne protocol, so switching between them is configuration only. The LLM keeps the work that needs text (form values, `/run` code, plans); the decider takes the picks.
+`decider/` puts a decision model behind HTTP so any agent or LLM can use it. It speaks the SystemOne protocol, which Jev (from TypeSafe or through OpenRouter), LiquidAI d1 and self-hosted Strands Decider servers all share, so switching between them is configuration only. The LLM keeps the work that needs text (form values, `/run` code, plans); the decider takes the picks.
 
 ```
-agent ── POST /decide ──→ decider ── SystemOne ──→ Jev · LiquidAI d1 · Strands
+agent ── POST /decide ──→ decider ── SystemOne ──→ Jev (OpenRouter or TypeSafe) · LiquidAI d1
 agent ── POST /step ────→ decider ── POST /run ──→ fast-browser
 agent ── POST /run ──────────────────────────────→ fast-browser   (direct, unchanged)
 ```
@@ -297,8 +297,16 @@ agent ── POST /run ───────────────────
 
 ### Run it
 
+Put the provider settings in `.env` next to `docker-compose.yml` (it is gitignored). For Jev through OpenRouter:
+
 ```bash
-echo SYSTEMONE_KEY=your-key > .env      # .env is gitignored
+SYSTEMONE_URL=https://openrouter.ai/api/v1/systemone
+SYSTEMONE_KEY=sk-or-...
+```
+
+Then:
+
+```bash
 docker compose up -d --build
 curl http://localhost:9300/health
 ```
@@ -309,11 +317,12 @@ Compose starts the browser on `localhost:9222` (this image, with profile and scr
 
 | Provider | `.env` |
 |---|---|
-| Jev (default) | `SYSTEMONE_KEY=...` |
-| LiquidAI d1 | `SYSTEMONE_URL=https://api.liquid.ai/decisions/v1/systemone`<br>`SYSTEMONE_MODEL=d1:free`<br>`SYSTEMONE_KEY=...` |
-| Strands Decider (self-hosted) | `COMPOSE_PROFILES=strands`<br>`SYSTEMONE_URL=http://strands:8000/v1/systemone`<br>`SYSTEMONE_MODEL=strands-decider` |
+| Jev through OpenRouter | `SYSTEMONE_URL=https://openrouter.ai/api/v1/systemone`<br>`SYSTEMONE_KEY=<OpenRouter key>` |
+| Jev from TypeSafe (default URL) | `SYSTEMONE_KEY=<TypeSafe key>` |
+| LiquidAI d1 | `SYSTEMONE_URL=https://api.liquid.ai/decisions/v1/systemone`<br>`SYSTEMONE_MODEL=d1:free`<br>`SYSTEMONE_KEY=<Liquid key>` |
+| Self-hosted Strands Decider, or any SystemOne server | `SYSTEMONE_URL=http://<host>:8000/v1/systemone` |
 
-[Strands Decider](https://github.com/strands-labs/strands-decider) is an Apache 2.0 model that runs in its own container (`decider/strands.Dockerfile`, CPU). The first start downloads the 2B model (several GB) into the `strands-models` volume; watch it with `docker compose logs -f strands`. Decisions are slower on CPU than through the hosted APIs, so raise `TIMEOUT_MS` if you see 504s. Page content never leaves your machine.
+`SYSTEMONE_MODEL` defaults to `jev-latest`, which OpenRouter maps to its current Jev model; set `typesafe/jev-1.13` to pin a version. OpenRouter adds `usage.cost` to every answer.
 
 ### `POST /decide`
 
@@ -378,7 +387,7 @@ On success the response has `ref`, `element`, `confidence`, and `snap_after` (th
 | `API_KEY` | _(none)_ | Require `Authorization: Bearer <key>` on `/decide` and `/step` |
 | `PORT` | `9300` | HTTP port |
 
-Compose reads the first five from `.env`, plus `BROWSER_PORT` (default 9222), `DECIDER_PORT` (default 9300) and `COMPOSE_PROFILES`. `BROWSER_KEY`, `API_KEY` and `PORT` apply when you run the decider image directly or add them to `docker-compose.yml`.
+Compose reads the first five from `.env`, plus `BROWSER_PORT` (default 9222) and `DECIDER_PORT` (default 9300). `BROWSER_KEY`, `API_KEY` and `PORT` apply when you run the decider image directly or add them to `docker-compose.yml`.
 
 ## Environment variables
 

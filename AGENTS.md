@@ -377,7 +377,7 @@ POST /run  {"code": "await click(3); await fill(7, 'data'); return await text('.
 
 ## Decisions: the decider service (optional)
 
-The decider is a second container that answers **decisions** with a decision model (Jev, LiquidAI d1, or a self-hosted Strands Decider) instead of your own LLM. A decision is a pick from options you already have: which element, which tool, which action, yes or no, a rating. The model scores every option in one forward pass and generates no tokens, so an answer takes about 0.1–0.5 s.
+The decider is a second container that answers **decisions** with a decision model (Jev through OpenRouter or TypeSafe, or LiquidAI d1) instead of your own LLM. A decision is a pick from options you already have: which element, which tool, which action, yes or no, a rating. The model scores every option in one forward pass and generates no tokens, so an answer takes about 0.1–0.5 s.
 
 Keep using your own LLM for anything that produces text: values to type, code for `/run`, plans, summaries. The decider only picks.
 
@@ -460,7 +460,7 @@ curl -s -X POST http://localhost:9300/step -H "Content-Type: application/json" \
 
 ### What leaves the machine
 
-`/step` sends the page's element list to the decision provider. Before it does, it masks the values of fields labelled like password, PIN, OTP, card, CVV, SSN, secret or token as `***`, and drops text a page has hidden in a field value to impersonate another element. `snap_after` is cleaned the same way. To keep page content on the machine, use the self-hosted Strands model (README, "Decider").
+`/step` sends the page's element list to the decision provider. Before it does, it masks the values of fields labelled like password, PIN, OTP, card, CVV, SSN, secret or token as `***`, and drops text a page has hidden in a field value to impersonate another element. `snap_after` is cleaned the same way. If a page holds data that must not leave the machine, don't use `/step` on it; use `/run`.
 
 ### Which endpoint
 

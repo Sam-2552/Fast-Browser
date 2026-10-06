@@ -20,16 +20,6 @@ services:
       TIMEOUT_MS: ${TIMEOUT_MS:-15000}
     depends_on: [browser]
 
-  # Optional self-hosted decision model: COMPOSE_PROFILES=strands
-  strands:
-    profiles: [strands]
-    build:
-      context: ./decider
-      dockerfile: strands.Dockerfile
-    volumes:
-      - strands-models:/models
-
 volumes:
   browser-profile:
   browser-screenshots:
-  strands-models:
