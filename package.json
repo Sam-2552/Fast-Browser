@@ -1,0 +1,13 @@
+{
+  "name": "fast-browser",
+  "version": "1.0.0",
+  "description": "Lean browser automation server for any agent",
+  "type": "module",
+  "main": "server.mjs",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "playwright-core": "^1.52.0"
+  }
+}
