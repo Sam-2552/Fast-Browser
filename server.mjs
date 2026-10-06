@@ -53,6 +53,20 @@ function clearDir(dir) {
   } catch {}
 }
 
+function tar(mode, archive, dir) {
+  const a = archive.replace(/\\/g, '/');
+  const d = dir.replace(/\\/g, '/');
+  const flag = mode === 'c' ? '-czf' : '-xzf';
+  const dot = mode === 'c' ? ' .' : '';
+  try {
+    execSync(`tar ${flag} "${a}" -C "${d}"${dot}`, { timeout: 30000 });
+  } catch (e) {
+    if (/remote shell/i.test(String(e.stderr || e.message))) {
+      execSync(`tar --force-local ${flag} "${a}" -C "${d}"${dot}`, { timeout: 30000 });
+    } else throw e;
+  }
+}
+
 function dirSize(dir) {
   let total = 0;
   try {
@@ -520,7 +534,7 @@ const server = http.createServer((req, res) => {
         ctx = null; pages = []; pi = 0; launching = null;
 
         const tmp = resolve(PROFILE, '..', 'profile-snapshot.tar.gz');
-        execSync(`tar -czf "${tmp}" -C "${PROFILE}" .`, { timeout: 30000 });
+        tar('c', tmp, PROFILE);
         const buf = readFileSync(tmp);
         rmSync(tmp, { force: true });
 
@@ -554,7 +568,7 @@ const server = http.createServer((req, res) => {
 
         const tmp = resolve(PROFILE, '..', 'profile-upload.tar.gz');
         writeFileSync(tmp, buf);
-        execSync(`tar -xzf "${tmp}" -C "${PROFILE}"`, { timeout: 30000 });
+        tar('x', tmp, PROFILE);
         rmSync(tmp, { force: true });
 
         await ensure();
@@ -604,7 +618,7 @@ server.listen(PORT, () => {
     try {
       mkdirSync(PROFILE, { recursive: true });
       if (readdirSync(PROFILE).length === 0 && existsSync(seed)) {
-        execSync(`tar -xzf "${seed}" -C "${PROFILE}"`, { timeout: 30000 });
+        tar('x', seed, PROFILE);
         process.stderr.write(`Seeded profile from ${seed}\n`);
       }
     } catch (e) {
