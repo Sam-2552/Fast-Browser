@@ -1,6 +1,6 @@
 # fast-browser
 
-A lean Docker image for blazing-fast browser automation. Any agent, any language, one HTTP call.
+Blazing-fast browser automation for any agent, any language, one HTTP call.
 
 Built to replicate the speed pattern behind ChatGPT's built-in browser: **one code snippet per batch of actions**, a persistent browser that stays open between calls, and only the output you print comes back.
 
@@ -14,12 +14,34 @@ Built to replicate the speed pattern behind ChatGPT's built-in browser: **one co
 
 ## Quick start
 
+### Headed (visible browser — watch it work)
+
+```bash
+npm install
+```
+
+**Windows:**
+```cmd
+set HEADED=1 && node server.mjs
+```
+
+**Linux/macOS:**
+```bash
+HEADED=1 node server.mjs
+```
+
+A Chrome window opens on your screen. Every call plays out visibly.
+
+### Docker (headless — for parallel/production)
+
 ```bash
 docker build -t fast-browser .
 docker run -d --name browser -p 9100:9222 fast-browser
 ```
 
-Then from any language:
+Use `curl http://localhost:9100/shot -o screenshot.jpg` to see the page at any time.
+
+### Call it
 
 ```bash
 curl -X POST http://localhost:9100/run \

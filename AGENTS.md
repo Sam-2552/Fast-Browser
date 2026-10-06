@@ -1,6 +1,43 @@
 # AGENTS.md — fast-browser for AI agents
 
-You are an AI agent. This file tells you how to use `fast-browser`, a containerized browser you control over HTTP. Read this entire file before your first browser call.
+You are an AI agent. This file tells you how to use `fast-browser`, a browser you control over HTTP. Read this entire file before your first browser call.
+
+## Starting the server
+
+### Option A: Local (headed — visible browser window)
+
+```bash
+cd <repo-root>
+npm install
+```
+
+**Windows:**
+```cmd
+set HEADED=1 && set PORT=9222 && node server.mjs
+```
+
+**Linux/macOS:**
+```bash
+HEADED=1 PORT=9222 node server.mjs
+```
+
+A Chrome window opens on your screen. Every action you send plays out visibly in real time. Uses your installed Chrome/Chromium with a dedicated profile at `./profile-local` (logins persist). Set `CHROME_BIN` if Chrome is not in the default location.
+
+### Option B: Docker (headless — for parallel/production use)
+
+```bash
+docker build -t fast-browser .
+docker run -d --name browser -p 9222:9222 fast-browser
+```
+
+No visible window. Use `GET /shot` to see the current page as a JPEG at any time. Mount a volume for persistent logins: `-v my-profile:/data/profile`.
+
+### Verifying it's running
+
+```bash
+curl http://localhost:9222/health
+# {"ok":true,"browser":"open","pages":1,"uptime_s":3}
+```
 
 ## Connection
 
@@ -11,7 +48,12 @@ Content-Type: application/json
 {"code": "<your JavaScript here>"}
 ```
 
-The default port is `9222`. If multiple containers are running, each is on a different port. Check with `GET /health`.
+The default port is `9222`. If multiple instances are running, each is on a different port. Check with `GET /health`.
+
+## Seeing the browser
+
+- **Headed mode** (Option A): The browser window is visible. You watch it work.
+- **Headless mode** (Option B): Call `GET /shot` or include `return await shot()` in your code to get a JPEG screenshot of the current page at any point. Save it to disk to inspect.
 
 ## Core rule: batch your actions
 
