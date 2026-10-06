@@ -49,14 +49,48 @@ curl http://localhost:9222/health
 
 If the container already exists but is stopped: `docker start browser`
 
-### Headed mode (visible browser — only for local debugging)
+### Headed mode (visible browser window)
 
-Only use this when the user explicitly asks to watch the browser. Requires Chrome/Chromium installed locally.
+Use headed mode when:
+- The user needs to **log in manually** (type credentials, solve CAPTCHAs, complete MFA)
+- The user wants to **watch** the browser work
+- You hit a login page and don't have stored credentials
 
-**Windows:** `set HEADED=1 && set PORT=9222 && node server.mjs`
-**Linux/macOS:** `HEADED=1 PORT=9222 node server.mjs`
+Headed mode requires `npm install` once in the repo, then:
 
-This is the only case where `npm install` is needed.
+**Windows:**
+```cmd
+set HEADED=1 && set PORT=9222 && node server.mjs
+```
+
+**Linux/macOS:**
+```bash
+HEADED=1 PORT=9222 node server.mjs
+```
+
+A Chrome window opens. The API is identical to Docker — same port, same endpoints. After the user logs in visually, the session is saved to the local profile and persists across restarts.
+
+To run headed on a different port (alongside Docker containers):
+```cmd
+set HEADED=1 && set PORT=9200 && node server.mjs
+```
+
+## Login and authentication
+
+**Never ask the user for passwords.** Instead:
+
+1. Start a **headed** instance (see above).
+2. Navigate to the login page: `POST /run {"code": "await goto('https://target.com/login')"}`
+3. Tell the user: "The login page is open in the browser window. Please sign in, then let me know when you're done."
+4. Wait for the user to confirm.
+5. The session (cookies, localStorage) is now saved in the profile and persists.
+
+For Docker containers that need an authenticated session:
+1. Log in once using a headed local instance with a named profile directory.
+2. Copy that profile into the Docker volume: `docker cp ./profile-local/. browser:/data/profile/`
+3. Restart the container: `docker restart browser`
+
+**If you encounter a login page in a headless Docker container**, do not attempt to fill credentials programmatically. Tell the user you need headed mode for login and switch to it.
 
 ## Connection
 
@@ -67,11 +101,12 @@ Content-Type: application/json
 {"code": "<your JavaScript here>"}
 ```
 
-The default port is `9222`. If multiple containers are running, each is on a different port. Check with `GET /health`.
+The default port is `9222`. If multiple instances are running, each is on a different port. Check with `GET /health`.
 
 ## Seeing the browser
 
-Call `GET /shot` or include `return await shot()` in your code to get a JPEG screenshot of the current page at any point. Save it to disk to inspect.
+- **Headed mode**: The browser window is visible on the user's screen.
+- **Headless Docker**: Call `GET /shot` to get a JPEG screenshot, or use `return await shot()` in your code. Save it to disk to inspect.
 
 ## Core rule: batch your actions
 
