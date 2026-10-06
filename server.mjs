@@ -552,9 +552,8 @@ body{background:#1a1a2e;color:#eee;font:13px/1.3 system-ui,-apple-system,sans-se
 #busy-dot.active{background:#f44;animation:pulse 1s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 #busy-label{font-size:11px;color:#888;margin-left:2px}
-#viewport{flex:1;position:relative;overflow:hidden;display:flex;justify-content:center;background:#111}
+#viewport{flex:1;position:relative;overflow:hidden;display:flex;justify-content:center;align-items:center;background:#111}
 #viewport canvas{cursor:crosshair;max-width:100%;max-height:100%;object-fit:contain}
-#cursor-layer{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none}
 #toolbar{display:flex;gap:5px;padding:6px 10px;background:#16213e;border-top:1px solid #0d1117;flex-shrink:0;flex-wrap:wrap;align-items:center}
 #toolbar input[type=text]{padding:4px 8px;background:#0f1629;color:#eee;border:1px solid #2a3a5c;border-radius:5px;font:12px system-ui;width:220px}
 #toolbar input[type=text]:focus{border-color:#4488cc;outline:none}
@@ -590,7 +589,6 @@ body{background:#1a1a2e;color:#eee;font:13px/1.3 system-ui,-apple-system,sans-se
 </div>
 <div id="viewport">
 <canvas id="c" width="1280" height="800"></canvas>
-<canvas id="cursor-layer" width="1280" height="800"></canvas>
 </div>
 <div id="toolbar">
 <input id="inp" type="text" placeholder="Type text, press Enter to send" autocomplete="off">
@@ -611,11 +609,10 @@ body{background:#1a1a2e;color:#eee;font:13px/1.3 system-ui,-apple-system,sans-se
 </div>
 <script>
 const c=document.getElementById('c'),cx=c.getContext('2d');
-const cl=document.getElementById('cursor-layer'),clx=cl.getContext('2d');
 const urlbar=document.getElementById('urlbar'),inp=document.getElementById('inp');
 const busyDot=document.getElementById('busy-dot'),busyLabel=document.getElementById('busy-label');
 const tabsEl=document.getElementById('tabs'),snapCount=document.getElementById('snap-count');
-let vw=1280,vh=800,clickRings=[],agentCursor=null,lastImg=null;
+let vw=1280,vh=800,clickRings=[],cursorTs=null,cursorX=0,cursorY=0,lastImg=null;
 
 async function post(u,d){return fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)})}
 
@@ -624,12 +621,9 @@ async function pollState(){
     urlbar.value=s.url||'';
     if(s.busy){busyDot.classList.add('active');busyLabel.textContent='Agent working...';}
     else{busyDot.classList.remove('active');busyLabel.textContent='';}
-    if(s.lastAction&&s.lastAction.ts){
-      const age=Date.now()-s.lastAction.ts;
-      if(age<3000&&(s.lastAction.action==='click'||s.lastAction.action==='dblclick')){
-        agentCursor={x:s.lastAction.x,y:s.lastAction.y,age};
-      }else agentCursor=null;
-    }else agentCursor=null;
+    if(s.lastAction&&s.lastAction.ts&&(s.lastAction.action==='click'||s.lastAction.action==='dblclick')){
+      cursorX=s.lastAction.x;cursorY=s.lastAction.y;cursorTs=s.lastAction.ts;
+    }
     let tabHtml='';
     (s.tabs||[]).forEach(t=>{
       const u=t.url||'about:blank';const short=u.replace(/^https?:\\/\\//,'').slice(0,30);
@@ -641,42 +635,50 @@ async function pollState(){
 
 async function pollShot(){
   try{const r=await fetch('/shot');if(!r.ok)throw 0;const b=await r.blob();
-    lastImg=await createImageBitmap(b);vw=lastImg.width;vh=lastImg.height;
-    c.width=vw;c.height=vh;cl.width=vw;cl.height=vh;
-    cx.drawImage(lastImg,0,0);drawOverlay();
+    lastImg=await createImageBitmap(b);
+    if(lastImg.width!==vw||lastImg.height!==vh){vw=lastImg.width;vh=lastImg.height;c.width=vw;c.height=vh;}
   }catch{}}
 
-function drawOverlay(){
-  clx.clearRect(0,0,cl.width,cl.height);
+function render(){
+  if(lastImg){cx.drawImage(lastImg,0,0);}
   const now=Date.now();
   clickRings=clickRings.filter(r=>{
-    const age=now-r.t;if(age>1200)return false;
-    const a=1-age/1200;const sz=12+age/30;
-    clx.beginPath();clx.arc(r.x,r.y,sz,0,Math.PI*2);
-    clx.strokeStyle='rgba(255,60,60,'+a+')';clx.lineWidth=2;clx.stroke();
+    const age=now-r.t;if(age>1500)return false;
+    const a=1-age/1500;const sz=10+age/40;
+    cx.beginPath();cx.arc(r.x,r.y,sz,0,Math.PI*2);
+    cx.strokeStyle='rgba(255,60,60,'+a+')';cx.lineWidth=2.5;cx.stroke();
+    cx.beginPath();cx.arc(r.x,r.y,4,0,Math.PI*2);
+    cx.fillStyle='rgba(255,60,60,'+a*0.6+')';cx.fill();
     return true;
   });
-  if(agentCursor){
-    const a=Math.max(0,1-agentCursor.age/3000);
-    clx.save();clx.globalAlpha=a;clx.translate(agentCursor.x,agentCursor.y);
-    clx.fillStyle='#4af';clx.beginPath();
-    clx.moveTo(0,0);clx.lineTo(0,20);clx.lineTo(6,15);clx.lineTo(10,22);clx.lineTo(13,20);clx.lineTo(9,13);clx.lineTo(15,11);clx.closePath();
-    clx.fill();clx.strokeStyle='#fff';clx.lineWidth=1;clx.stroke();
-    clx.restore();
+  if(cursorTs){
+    const age=now-cursorTs;
+    if(age<4000){
+      const a=Math.max(0,1-age/4000);
+      cx.save();cx.globalAlpha=a;
+      cx.translate(cursorX,cursorY);
+      cx.fillStyle='#44aaff';cx.strokeStyle='#fff';cx.lineWidth=1.5;
+      cx.beginPath();
+      cx.moveTo(0,0);cx.lineTo(0,24);cx.lineTo(7,18);cx.lineTo(12,28);cx.lineTo(16,26);cx.lineTo(11,16);cx.lineTo(18,14);cx.closePath();
+      cx.fill();cx.stroke();
+      cx.font='bold 11px system-ui';cx.fillStyle='rgba(68,170,255,'+a+')';
+      cx.fillText('Agent',20,10);
+      cx.restore();
+    }else{cursorTs=null;}
   }
-  if(clickRings.length||agentCursor)requestAnimationFrame(drawOverlay);
+  requestAnimationFrame(render);
 }
 
 async function loop(){await Promise.all([pollState(),pollShot()]);setTimeout(loop,400);}
-loop();
+loop();render();
 
 function canvasCoords(e){const r=c.getBoundingClientRect();
   return{x:Math.round((e.clientX-r.left)/r.width*vw),y:Math.round((e.clientY-r.top)/r.height*vh)};}
 
 c.addEventListener('click',async e=>{const{x,y}=canvasCoords(e);
-  clickRings.push({x,y,t:Date.now()});drawOverlay();await post('/interact',{action:'click',x,y});});
+  clickRings.push({x,y,t:Date.now()});await post('/interact',{action:'click',x,y});});
 c.addEventListener('dblclick',async e=>{const{x,y}=canvasCoords(e);
-  clickRings.push({x,y,t:Date.now()});drawOverlay();await post('/interact',{action:'dblclick',x,y});});
+  clickRings.push({x,y,t:Date.now()});await post('/interact',{action:'dblclick',x,y});});
 c.addEventListener('wheel',async e=>{e.preventDefault();
   await post('/interact',{action:'scroll',dy:e.deltaY>0?300:-300});},{passive:false});
 
@@ -721,7 +723,6 @@ async function takeSnap(){
       g.fillStyle='#f44';g.beginPath();g.arc(W-70,TAB_H+20,5,0,Math.PI*2);g.fill();
       g.fillStyle='#888';g.font='11px system-ui';g.fillText('Agent working...',W-170,TAB_H+24);}
     g.drawImage(c,0,TAB_H+NAV_H,vw,vh);
-    g.drawImage(cl,0,TAB_H+NAV_H,vw,vh);
     g.fillStyle='#16213e';g.fillRect(0,TAB_H+NAV_H+vh,W,TB_H);
     g.strokeStyle='#0d1117';g.lineWidth=1;g.beginPath();g.moveTo(0,TAB_H+NAV_H+vh);g.lineTo(W,TAB_H+NAV_H+vh);g.stroke();
     g.fillStyle='#8899aa';g.font='11px system-ui';
