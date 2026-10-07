@@ -1,7 +1,7 @@
 FROM node:22-alpine
 
 WORKDIR /app
-COPY server.mjs ./
+COPY *.mjs ./
 USER node
 
 EXPOSE 9300

@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Combobox</title>
+    <style>
+      body { margin: 30px; font: 15px system-ui, sans-serif; }
+      input { width: 280px; padding: 8px; font: inherit; }
+      #list { width: 300px; border: 1px solid #ccc; min-height: 0; }
+      #list:empty { border: 0; }
+      [role="option"] { padding: 8px; cursor: pointer; }
+      [role="option"]:hover { background: #eef; }
+    </style>
+  </head>
+  <body>
+    <label for="city">City search</label><br />
+    <input id="city" role="combobox" aria-autocomplete="list" aria-controls="list" aria-expanded="false" autocomplete="off" />
+    <div id="list" role="listbox" aria-label="Suggestions"></div>
+    <p id="picked">Nothing picked</p>
+    <script>
+      const cities = ["Lisbon, Portugal", "Lima, Peru", "London, United Kingdom", "Lyon, France"];
+      const city = document.getElementById("city");
+      const list = document.getElementById("list");
+      let timer;
+      // Suggestions arrive late on purpose: /observe must wait for them after a fill.
+      city.addEventListener("input", () => {
+        clearTimeout(timer);
+        list.innerHTML = "";
+        city.setAttribute("aria-expanded", "false");
+        const q = city.value.trim().toLowerCase();
+        timer = setTimeout(() => {
+          const hits = q ? cities.filter((c) => c.toLowerCase().startsWith(q)) : [];
+          list.innerHTML = hits.map((c, i) => `<div role="option" id="opt${i}" tabindex="-1">${c}</div>`).join("");
+          city.setAttribute("aria-expanded", hits.length ? "true" : "false");
+        }, 120);
+      });
+      list.addEventListener("click", (e) => {
+        const o = e.target.closest('[role="option"]');
+        if (!o) return;
+        city.value = o.textContent;
+        window.picked = o.textContent;
+        document.getElementById("picked").textContent = "Picked " + o.textContent;
+        list.innerHTML = "";
+        city.setAttribute("aria-expanded", "false");
+      });
+    </script>
+  </body>
+</html>

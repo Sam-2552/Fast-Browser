@@ -10,7 +10,7 @@ ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
-COPY server.mjs ./
+COPY server.mjs observe.js ./
 
 RUN mkdir -p /data/profile
 VOLUME /data/profile

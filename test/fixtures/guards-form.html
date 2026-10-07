@@ -1,0 +1,28 @@
+<!doctype html>
+<!-- Adapted from browser-use/jev-ultrafast (MIT, (c) 2026 Browser Use) — see THIRD_PARTY_NOTICES.md -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Form guard checks</title>
+    <style>
+      body { margin: 30px; font: 15px system-ui, sans-serif; }
+      label { display: block; margin: 6px 0; }
+      [role="option"] { padding: 4px; }
+    </style>
+  </head>
+  <body>
+    <form id="form" onsubmit="return false">
+      <p id="price">Total $10</p>
+      <button id="buy" type="button" onclick="window.buys=(window.buys||0)+1">Buy</button>
+      <label>Search<input id="query" role="combobox" aria-controls="results" aria-expanded="false" value=""></label>
+      <div id="results" role="listbox"></div>
+      <label><input id="check" type="checkbox">Gift wrap</label>
+      <label><input id="radio" type="radio" name="ship">Express</label>
+      <label>Order id<input id="ro" readonly value="A-17"></label>
+      <label>Password<input id="pw" type="password" value="never expose this"></label>
+      <button id="off" type="button" disabled>Unavailable</button>
+      <select id="cat" aria-label="Category"><option>All</option><option>Design</option><option disabled>Sold out</option></select>
+    </form>
+    <aside id="aside">Unrelated news</aside>
+  </body>
+</html>

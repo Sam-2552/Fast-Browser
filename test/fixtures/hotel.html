@@ -1,0 +1,110 @@
+<!doctype html>
+<!-- Adapted from browser-use/jev-ultrafast (MIT, (c) 2026 Browser Use) — see THIRD_PARTY_NOTICES.md -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Forma · Find a place to slow down</title>
+    <style>
+      * { box-sizing: border-box; }
+      body { margin: 0; font: 15px system-ui, sans-serif; color: #343e38; background: #fcfcf8; }
+      header { height: 56px; border-bottom: 1px solid #dce2d8; display: flex; align-items: center; justify-content: space-between; padding: 0 40px; }
+      .logo { font: 26px Georgia, serif; color: #2e5344; text-decoration: none; }
+      nav a { color: inherit; text-decoration: none; margin-left: 24px; }
+      main { padding: 20px 40px; }
+      h1 { font: 30px Georgia, serif; margin: 0 0 6px; }
+      h2 { font: 20px Georgia, serif; margin: 0; }
+      h2 a { color: #304c36; text-decoration: none; }
+      p { margin: 4px 0 12px; color: #6f7a67; }
+      button, input, select { font: inherit; }
+      button { background: white; border: 1px solid #d6ddcf; border-radius: 6px; padding: 8px 14px; color: #38503e; cursor: pointer; }
+      .search { display: flex; gap: 12px; margin-top: 12px; }
+      input[type="search"] { flex: 1; min-width: 0; border: 1px solid #d6ddcf; border-radius: 6px; padding: 10px 14px; }
+      .search button { background: #365b45; color: white; border-color: #365b45; padding: 8px 28px; }
+      .filters { display: flex; gap: 24px; align-items: center; margin: 14px 0; font-size: 13px; }
+      .filters label { display: flex; gap: 7px; align-items: center; }
+      .filters select { padding: 6px 10px; border: 1px solid #d6ddcf; border-radius: 5px; background: white; }
+      #status { font-size: 13px; color: #42684b; margin: 0 0 12px; }
+      .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+      .card { border: 1px solid #e1e6d9; border-radius: 9px; background: white; padding: 14px 16px; }
+      .photo { height: 70px; border-radius: 6px; background: #e4e6da; margin-bottom: 10px; }
+      .location { font: 10px ui-monospace, monospace; letter-spacing: 1px; color: #94a18a; margin-bottom: 6px; }
+      .meta { font-size: 12px; margin: 8px 0 12px; color: #8d987f; }
+      .card-bottom { display: flex; align-items: center; justify-content: space-between; }
+      .empty { padding: 30px; text-align: center; border: 1px dashed #cbd6c2; }
+      .success { padding: 10px 14px; background: #edf3e5; color: #628250; border-radius: 6px; font-size: 13px; margin-top: 16px; }
+      footer { font-size: 11px; color: #a5ae9b; padding-top: 16px; border-top: 1px solid #e1e6d9; margin-top: 20px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <a href="#" class="logo" id="home">forma.</a>
+      <nav><a href="#" id="stays">Find a stay</a></nav>
+    </header>
+    <main id="content"></main>
+    <script>
+      const root = document.getElementById("content");
+      let query = "", category = "all", free = false, searched = false, opened = null;
+      const places = [
+        { name: "Casa Flora", city: "Lisbon", category: "Design", free: true, price: 145,
+          description: "A quiet courtyard, warm terracotta, and light that stays all afternoon." },
+        { name: "The Glasshouse", city: "Copenhagen", category: "Design", free: true, price: 210,
+          description: "An airy studio tucked into a green corner of the city." },
+        { name: "Serra Lodge", city: "Lisbon", category: "Nature", free: false, price: 120,
+          description: "A hillside retreat for slower mornings and long walks." },
+      ];
+      const slug = (name) => name.toLowerCase().replaceAll(" ", "-");
+      // Tests read the applied state from here instead of scraping the DOM.
+      function publish() {
+        window.hotel = { query, category, free, searched, opened };
+      }
+      function statusLine(count) {
+        return `Showing ${count} ${count === 1 ? "place" : "places"} · destination ${searched ? query : "anywhere"} · category ${category === "all" ? "all stays" : category} · free cancellation ${free ? "on" : "off"}`;
+      }
+      function travel() {
+        opened = null;
+        document.title = "Forma · Find a place to slow down";
+        root.innerHTML = `<h1>Somewhere you can exhale.</h1><p>Small, considered places. A little closer to what matters.</p><form class="search" id="search"><input type="search" id="destination" name="destination" aria-label="Destination" placeholder="Where would you like to go?" autocomplete="off"><button type="submit">Find stays</button></form><div class="filters"><label>Category <select id="category" name="category" aria-label="Stay category"><option value="all">All stays</option><option value="Design">Design</option><option value="Nature">Nature</option><option value="Coastal">Coastal</option></select></label><label><input type="checkbox" id="free" name="cancellation"> Free cancellation</label></div><p id="status" role="status"></p><div class="grid" id="results"></div><footer>Thoughtful places, independent hosts. Local demo: no bookings or payments.</footer>`;
+        document.getElementById("destination").value = query;
+        document.getElementById("category").value = category;
+        document.getElementById("free").checked = free;
+        document.getElementById("search").onsubmit = (e) => {
+          e.preventDefault();
+          query = document.getElementById("destination").value;
+          searched = true;
+          results();
+        };
+        document.getElementById("category").onchange = (e) => { category = e.target.value; results(); };
+        document.getElementById("free").onchange = (e) => { free = e.target.checked; results(); };
+        results();
+      }
+      function results() {
+        const rows = places.filter((p) =>
+          (!searched || p.city.toLowerCase().includes(query.trim().toLowerCase())) &&
+          (category === "all" || p.category === category) &&
+          (!free || p.free));
+        document.getElementById("status").textContent = statusLine(rows.length);
+        const target = document.getElementById("results");
+        target.innerHTML = rows.length
+          ? rows.map((p) => `<article class="card"><div class="photo"></div><div class="location">${p.city.toUpperCase()} · ${p.category.toUpperCase()}</div><h2><a href="#${slug(p.name)}" data-place="${p.name}">${p.name}</a></h2><div class="meta">${p.free ? "Free cancellation" : "Non-refundable"} · 2 guests</div><div class="card-bottom"><div class="price">€${p.price} / night</div><button type="button" data-place="${p.name}" aria-label="View ${p.name}">View stay ↗</button></div></article>`).join("")
+          : '<div class="empty">No places match these filters. Try another destination or category.</div>';
+        target.querySelectorAll("[data-place]").forEach((el) => (el.onclick = (e) => {
+          e.preventDefault();
+          detail(places.find((p) => p.name === el.dataset.place));
+        }));
+        publish();
+      }
+      function detail(p) {
+        opened = p.name;
+        location.hash = slug(p.name);
+        document.title = `${p.name} · Forma`;
+        root.innerHTML = `<button type="button" id="back">← All stays</button><div class="edition">${p.city.toUpperCase()} · ${p.category.toUpperCase()}</div><h1>${p.name}</h1><p>${p.description}</p><div class="price">€${p.price} / night · 2 guests</div><div class="success">${p.free ? "Free cancellation included" : "Non-refundable stay"}</div><p id="filters-note">Your filters: ${category} · Free cancellation ${free ? "enabled" : "off"} · Destination ${query || "anywhere"}</p><footer>Local demo property. No reservation has been made.</footer>`;
+        document.getElementById("back").onclick = () => { location.hash = ""; travel(); };
+        publish();
+      }
+      document.getElementById("home").onclick = (e) => { e.preventDefault(); travel(); };
+      document.getElementById("stays").onclick = (e) => { e.preventDefault(); travel(); };
+      travel();
+    </script>
+  </body>
+</html>

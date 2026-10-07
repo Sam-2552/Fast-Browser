@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Components</title>
+    <style>
+      body { margin: 30px; font: 15px system-ui, sans-serif; }
+      #ce { width: 300px; min-height: 30px; border: 1px solid #999; }
+    </style>
+  </head>
+  <body>
+    <my-btn id="b1">Sign in</my-btn>
+    <my-btn id="b2"><span>Create account</span></my-btn>
+    <div id="ce" contenteditable="true"></div>
+    <select id="long" aria-label="A very long dropdown name that keeps going and going so that the field name alone fills most of the label budget">
+      <option>Short</option>
+      <option>An equally long option label that goes on and on well past any sensible length for a dropdown option text</option>
+    </select>
+    <button id="hang" onclick="setTimeout(() => { const end = Date.now() + 9000; while (Date.now() < end) {} }, 10)">Freeze</button>
+    <script>
+      customElements.define('my-btn', class extends HTMLElement {
+        constructor() {
+          super();
+          const root = this.attachShadow({ mode: 'open' });
+          root.innerHTML = '<button style="width:200px;height:40px"><slot></slot></button>';
+          root.querySelector('button').onclick = () => { (window.slotClicks ||= []).push(this.id); };
+        }
+      });
+    </script>
+  </body>
+</html>

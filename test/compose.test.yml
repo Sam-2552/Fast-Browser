@@ -1,0 +1,41 @@
+# Offline test stack. Use with the main file:
+#   docker compose -f docker-compose.yml -f test/compose.test.yml up -d --build browser decider mock
+#   docker compose -f docker-compose.yml -f test/compose.test.yml run --rm tests
+# Own project name so test containers and volumes never touch a running real stack.
+name: fast-browser-test
+
+services:
+  browser:
+    ports: !override ["127.0.0.1:${TEST_BROWSER_PORT:-19222}:9222"]
+    environment:
+      STEP_TIMEOUT_MS: 4000
+
+  decider:
+    ports: !override ["127.0.0.1:${TEST_DECIDER_PORT:-19300}:9300"]
+    environment:
+      SYSTEMONE_URL: http://mock:8000/v1/systemone
+      SYSTEMONE_KEY: test-key
+      SYSTEMONE_MODEL: mock-1
+      ALLOWED_HOSTS: decider
+    depends_on: [browser, mock]
+
+  mock:
+    image: node:22-alpine
+    volumes: ["./test:/test:ro"]
+    command: ["node", "/test/mock-systemone.mjs"]
+    # A second site name for the cross-site value test
+    networks:
+      default:
+        aliases: [shop.other.test]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8000/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      start_period: 3s
+
+  tests:
+    image: node:22-alpine
+    profiles: [test]
+    volumes: ["./test:/test:ro"]
+    command: ["node", "/test/run.mjs"]
+    depends_on: [browser, decider, mock]

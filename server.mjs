@@ -6,9 +6,11 @@
 
 import http from 'node:http';
 import vm from 'node:vm';
-import { existsSync, mkdirSync, readdirSync, statSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, statSync, rmSync, writeFileSync, readFileSync, readlinkSync } from 'node:fs';
+import { hostname } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { chromium } from 'playwright-core';
 
 // ── Config ──────────────────────────────────────────────────────────
@@ -19,8 +21,12 @@ const PROFILE = process.env.PROFILE_DIR || '/data/profile';
 const CHROME  = process.env.CHROME_BIN || detect();
 const ACT_MS  = 5000;   // element-action timeout
 const NAV_MS  = 20000;  // navigation timeout
+const STEP_MS = +(process.env.STEP_TIMEOUT_MS || 15000);  // hard deadline for one /observe or /act
 const RING    = 200;     // console/network ring buffer size
 const T0      = Date.now();
+const ENGINE  = readFileSync(new URL('./observe.js', import.meta.url), 'utf8');
+const engine  = arg => `(${ENGINE}
+)(${JSON.stringify(arg)})`;
 
 function detect() {
   for (const p of ['/usr/bin/chromium-browser', '/usr/bin/chromium',
@@ -45,7 +51,12 @@ let netRing = [];
 let conRing = [];
 let blocked = new Set();
 let lastAction = null;  // last /interact action (for viewer cursor)
-let busy = false;       // true while /run is executing
+let busy = false;       // true while /run, /observe or /act is executing
+let refs = new Map();   // snap() ref n -> {node, role, name}
+let refsPage = null;
+const observations = new Map(); // obs id -> observation, last 8
+let obsSeq = 0;
+let afterInput = null;  // last /act input, for the post-input wait
 
 const P = () => pages[pi]; // current page shorthand
 
@@ -92,6 +103,11 @@ async function ensure() {
   launching = (async () => {
     try {
       if (!existsSync(PROFILE)) mkdirSync(PROFILE, { recursive: true });
+      // A recreated container has a new hostname; Chromium then treats the old lock as another machine's and refuses
+      try {
+        if (!readlinkSync(join(PROFILE, 'SingletonLock')).startsWith(hostname() + '-'))
+          for (const f of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) rmSync(join(PROFILE, f), { force: true });
+      } catch {}
       ctx = await chromium.launchPersistentContext(PROFILE, {
         executablePath: CHROME,
         headless: !HEADED,
@@ -160,49 +176,14 @@ async function goto(url) {
 function url() { return P().url(); }
 async function title() { return P().title(); }
 
-// Snapshot — compact interactive-element listing
+// Snapshot — compact interactive-element listing; refs are engine node ids, not DOM attributes
 async function snap(opts = {}) {
   const lim = opts.limit ?? 150;
-  const items = await P().evaluate(lim => {
-    const S = 'a,button,input,select,textarea,[role="button"],[role="link"],[role="tab"],' +
-      '[role="menuitem"],[role="checkbox"],[role="radio"],[role="switch"],[role="combobox"],' +
-      '[role="textbox"],[contenteditable="true"],summary';
-    const all = [...document.querySelectorAll(S)];
-    // Walk open shadow roots
-    const walk = r => {
-      for (const el of r.querySelectorAll('*'))
-        if (el.shadowRoot) { all.push(...el.shadowRoot.querySelectorAll(S)); walk(el.shadowRoot); }
-    };
-    walk(document);
-    let n = 0;
-    return all.reduce((acc, el) => {
-      if (n >= lim) return acc;
-      const b = el.getBoundingClientRect();
-      if (!b.width || !b.height) return acc;
-      const s = getComputedStyle(el);
-      if (s.visibility === 'hidden' || s.display === 'none') return acc;
-      n++;
-      el.setAttribute('data-fb', String(n));
-      const tag = el.tagName.toLowerCase();
-      const role = el.getAttribute('role') || '';
-      const type = el.getAttribute('type') || '';
-      const txt = (el.innerText || '').trim().replace(/\s+/g, ' ').slice(0, 60);
-      const ph = el.placeholder || '';
-      const aria = el.getAttribute('aria-label') || '';
-      const val = 'value' in el ? String(el.value || '').slice(0, 30) : '';
-      const href = tag === 'a' ? (el.href || '').slice(0, 120) : '';
-      const chk = (type === 'checkbox' || type === 'radio') ? el.checked : null;
-      const desc = tag === 'a' ? 'link'
-        : (tag === 'button' || role === 'button') ? 'button'
-        : (tag === 'input' || tag === 'textarea') ? `${tag}${type ? '[' + type + ']' : ''}`
-        : tag === 'select' ? 'select' : (role || tag);
-      const label = txt || aria || ph || el.name || '';
-      acc.push({ n, desc, label, val, href, chk });
-      return acc;
-    }, []);
-  }, lim);
-  return items.map(e => {
-    let s = `[${e.n}] ${e.desc}`;
+  const items = await P().evaluate(engine({ scope: 'page', limit: lim })) || [];
+  refs = new Map(items.map((e, i) => [i + 1, { node: e.node, role: e.role, name: e.name }]));
+  refsPage = P();
+  return items.map((e, i) => {
+    let s = `[${i + 1}] ${e.desc}`;
     if (e.label) s += ` "${e.label}"`;
     if (e.val)   s += ` val="${e.val}"`;
     if (e.chk === true)  s += ' ✓';
@@ -213,18 +194,36 @@ async function snap(opts = {}) {
 }
 
 // Element interaction — ref can be a snap number or a CSS/text selector
-const loc = r => (typeof r === 'number' || (typeof r === 'string' && /^\d+$/.test(r)))
-  ? P().locator(`[data-fb="${r}"]`) : P().locator(String(r));
+const isRef = r => typeof r === 'number' || (typeof r === 'string' && /^\d+$/.test(r));
 
-async function click(r, o)    { await loc(r).click({ timeout: ACT_MS, ...o }); }
-async function dblclick(r, o) { await loc(r).dblclick({ timeout: ACT_MS, ...o }); }
-async function fill(r, v)     { await loc(r).fill(String(v), { timeout: ACT_MS }); }
-async function selectOpt(r, v){ await loc(r).selectOption(v, { timeout: ACT_MS }); }
-async function type(r, v, o)  { await loc(r).pressSequentially(String(v), { timeout: ACT_MS, delay: 50, ...o }); }
-async function check(r)       { await loc(r).check({ timeout: ACT_MS }); }
-async function uncheck(r)     { await loc(r).uncheck({ timeout: ACT_MS }); }
-async function hover(r)       { await loc(r).hover({ timeout: ACT_MS }); }
-async function focus(r)       { await loc(r).focus({ timeout: ACT_MS }); }
+async function refHandle(r) {
+  const n = +r, ref = refs.get(n);
+  const gone = () => new Error(`ref ${n} changed since snap() — run snap() again`);
+  if (!ref || refsPage !== P()) throw gone();
+  const h = await P().evaluateHandle(engine({ op: 'ref', ...ref })).catch(() => null);
+  const el = h?.asElement();
+  if (!el) { await h?.dispose().catch(() => {}); throw gone(); }
+  return el;
+}
+
+// Runs fn on an ElementHandle for refs (keeps Playwright's actionability checks) or a Locator for selectors.
+async function withTarget(r, fn) {
+  if (!isRef(r)) return fn(P().locator(String(r)));
+  const el = await refHandle(r);
+  try { return await fn(el); } finally { el.dispose().catch(() => {}); }
+}
+
+async function click(r, o)    { await withTarget(r, t => t.click({ timeout: ACT_MS, ...o })); }
+async function dblclick(r, o) { await withTarget(r, t => t.dblclick({ timeout: ACT_MS, ...o })); }
+async function fill(r, v)     { await withTarget(r, t => t.fill(String(v), { timeout: ACT_MS })); }
+async function selectOpt(r, v){ await withTarget(r, t => t.selectOption(v, { timeout: ACT_MS })); }
+async function type(r, v, o)  {
+  await withTarget(r, t => (t.pressSequentially ? t.pressSequentially.bind(t) : t.type.bind(t))(String(v), { timeout: ACT_MS, delay: 50, ...o }));
+}
+async function check(r)       { await withTarget(r, t => t.check({ timeout: ACT_MS })); }
+async function uncheck(r)     { await withTarget(r, t => t.uncheck({ timeout: ACT_MS })); }
+async function hover(r)       { await withTarget(r, t => t.hover({ timeout: ACT_MS })); }
+async function focus(r)       { await withTarget(r, t => t.focus(isRef(r) ? undefined : { timeout: ACT_MS })); }
 
 // Content extraction
 async function text(sel, max = 4000) {
@@ -405,6 +404,111 @@ async function exec(code, tmo = 30000, maxOut = 8000) {
   return { ok: true, output: out, elapsed_ms: elapsed };
 }
 
+// ── Observe / act (decision loop primitives) ────────────────────────
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const sha = s => createHash('sha256').update(s).digest('hex');
+// Key-sorted JSON so the fingerprint does not depend on property order.
+const stable = v => Array.isArray(v) ? '[' + v.map(stable).join(',') + ']'
+  : v && typeof v === 'object' ? '{' + Object.keys(v).sort().map(k => JSON.stringify(k) + ':' + stable(v[k])).join(',') + '}'
+  : JSON.stringify(v ?? null);
+
+async function readState(p) {
+  for (let i = 0; i < 10; i++) {
+    const s = await p.evaluate(engine({ scope: 'viewport' })).catch(() => null);
+    if (s) return s;
+    await sleep(20);
+  }
+  await p.waitForLoadState('domcontentloaded', { timeout: 2000 }).catch(() => {});
+  return p.evaluate(engine({ scope: 'viewport' })).catch(() => null);
+}
+
+async function observe() {
+  await ensure();
+  const p = P();
+  if (afterInput) {
+    const a = afterInput;
+    afterInput = null;
+    if (a.page === p)
+      await Promise.race([p.evaluate(engine({ op: 'wait', node: a.node, kind: a.kind })).catch(() => {}), sleep(1000)]);
+  }
+  const s = await readState(p);
+  if (!s) return { ok: false, error: 'Page is still navigating; observe again' };
+  const fingerprint = sha(stable({ url: s.url, text: s.text, actions: s.actions, scroll: s.scroll }));
+  const marker = sha(s.marker);
+  const obs = 'o' + (++obsSeq);
+  const actions = s.actions.map(({ rect, ...a }) => a);
+  observations.set(obs, { page: p, actions, guards: s.guards, pageKey: s.page_key, marker, w: s.w, h: s.h });
+  while (observations.size > 8) observations.delete(observations.keys().next().value);
+  return { ok: true, obs, url: s.url, title: s.title, text: s.text, scroll: s.scroll, omitted: s.omitted,
+    fingerprint, marker, actions };
+}
+
+async function currentMarker(p) {
+  const s = await p.evaluate(engine({ scope: 'viewport' })).catch(() => null);
+  return s ? sha(s.marker) : null;
+}
+
+let cdpSessions = new WeakMap();
+async function cdpFor(p) {
+  if (!cdpSessions.has(p)) cdpSessions.set(p, await ctx.newCDPSession(p));
+  return cdpSessions.get(p);
+}
+
+async function act(obsId, actionId, text) {
+  await ensure();
+  const o = observations.get(obsId);
+  if (!o) return { ok: false, stale: true, error: 'Unknown or expired observation; observe again' };
+  const p = P();
+  if (o.page !== p || p.isClosed()) return { ok: false, stale: true, error: 'Another tab is now current; observe again' };
+  const a = o.actions.find(x => x.id === actionId);
+  if (!a) return { ok: false, stale: true, error: `Action ${actionId} is not in observation ${obsId}` };
+  const stale = error => ({ ok: false, stale: true, error });
+  const unknown = e => ({ ok: false, unknown: true, error: 'Outcome unknown: ' + trimErr(e) });
+
+  if (a.kind === 'scroll' || a.kind === 'wait') {
+    if (await currentMarker(p) !== o.marker) return stale('Page changed since this observation; observe again');
+    if (a.kind === 'wait') { await sleep(100); return { ok: true, executed: a.id }; }
+    try {
+      await p.mouse.move(o.w / 2, o.h * 0.75);
+      await p.mouse.wheel(0, a.delta);
+    } catch (e) { return unknown(e); }
+    afterInput = { page: p, node: null, kind: a.kind };
+    return { ok: true, executed: a.id };
+  }
+
+  const cur = await p.evaluate(engine({ op: 'check', node: a.node })).catch(() => null);
+  if (!cur || cur.pk !== o.pageKey || cur.g !== o.guards[a.node])
+    return stale('Page changed since this observation; observe again');
+
+  let t;
+  try {
+    t = await p.evaluate(engine({ op: 'target', node: a.node, kind: a.kind, value: a.value }));
+  } catch (e) {
+    if (a.kind === 'select') return unknown(e);
+    return stale('Document changed during the target check; observe again');
+  }
+  if (!t) return stale('Document is navigating; observe again');
+  if (t.stale) return stale(`Target changed: ${t.stale}; observe again`);
+  afterInput = { page: p, node: a.node, kind: a.kind };
+  if (a.kind === 'select') {
+    return t.selected ? { ok: true, executed: a.id } : unknown(new Error('dropdown change was not confirmed'));
+  }
+  lastAction = { action: 'click', x: Math.round(t.x), y: Math.round(t.y), ts: Date.now() };
+  try {
+    await p.mouse.click(t.x, t.y);
+    if (a.kind === 'fill') {
+      const cdp = await cdpFor(p);
+      await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', modifiers: 2, commands: ['selectAll'] });
+      await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', modifiers: 2 });
+      await p.keyboard.insertText(text);
+    }
+  } catch (e) {
+    cdpSessions.delete(p);
+    return unknown(e);
+  }
+  return { ok: true, executed: a.id };
+}
+
 // ── HTTP server ─────────────────────────────────────────────────────
 function trimErr(e) {
   let m = e.message || String(e);
@@ -443,6 +547,15 @@ function jsonRes(res, code, obj) {
   res.end(b);
 }
 
+// A hung renderer never settles page.evaluate; the deadline releases the serial lock.
+function within(work, what) {
+  let timer;
+  return Promise.race([
+    work,
+    new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(`${what} timed out after ${STEP_MS}ms; the page may be hung`)), STEP_MS); }),
+  ]).finally(() => clearTimeout(timer));
+}
+
 // Serialize requests so parallel calls don't race on the page
 let lock = Promise.resolve();
 function serial(fn) {
@@ -451,11 +564,34 @@ function serial(fn) {
   return p;
 }
 
+// Pages the browser opens (or a DNS-rebinding page in the user's browser) must not reach /run.
+// Rebinding needs a dotted attacker domain in Host, so loopback, IP literals, single-label names
+// (Docker service names) and ALLOWED_HOSTS pass. A present Origin must be same-origin or loopback/ALLOWED_HOSTS.
+const HOSTS = new Set(['localhost', '127.0.0.1', '::1',
+  ...(process.env.ALLOWED_HOSTS || '').split(',').map(h => h.trim().toLowerCase()).filter(Boolean)]);
+const bare = h => h.toLowerCase().replace(/^\[|\]$/g, '');
+const hostOk = h => HOSTS.has(h) || !h.includes('.') || /^\d{1,3}(\.\d{1,3}){3}$/.test(h) || h.includes(':');
+function requestAllowed(req) {
+  let host;
+  try { host = bare(new URL(`http://${req.headers.host}`).hostname); } catch { return false; }
+  if (!req.headers.host || !host || !hostOk(host)) return false;
+  const origin = req.headers.origin;
+  if (origin == null) return true;
+  try {
+    const u = new URL(origin);
+    return /^https?:$/.test(u.protocol) && (u.host === req.headers.host.toLowerCase() || HOSTS.has(bare(u.hostname)));
+  } catch { return false; }
+}
+
 const server = http.createServer((req, res) => {
-  // CORS
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST,GET,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+  if (!requestAllowed(req)) return jsonRes(res, 403, { ok: false, error: 'Forbidden host or origin' });
+  // CORS only for allowed origins; never a wildcard
+  if (req.headers.origin) {
+    res.setHeader('Access-Control-Allow-Origin', req.headers.origin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Methods', 'POST,GET,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+  }
   if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
 
   // Auth
@@ -502,6 +638,45 @@ const server = http.createServer((req, res) => {
         jsonRes(res, 200, r);
       } catch (e) {
         jsonRes(res, 200, { ok: false, error: trimErr(e), elapsed_ms: Date.now() - t0 });
+      } finally {
+        busy = false;
+      }
+    });
+  }
+
+  // ── POST /observe ───────────────────────────────────────────────
+  if (path === '/observe' && req.method === 'POST') {
+    return serial(async () => {
+      busy = true;
+      try {
+        await readBody(req);
+        jsonRes(res, 200, await within(observe(), 'observe'));
+      } catch (e) {
+        jsonRes(res, 200, { ok: false, error: trimErr(e) });
+      } finally {
+        busy = false;
+      }
+    });
+  }
+
+  // ── POST /act ───────────────────────────────────────────────────
+  if (path === '/act' && req.method === 'POST') {
+    return serial(async () => {
+      let body;
+      try { body = JSON.parse(await readBody(req)); } catch { body = null; }
+      if (!body || typeof body.obs !== 'string' || typeof body.action !== 'string')
+        return jsonRes(res, 400, { ok: false, error: 'Body must be JSON {obs, action, text?}' });
+      const o = observations.get(body.obs);
+      const kind = o?.actions.find(x => x.id === body.action)?.kind;
+      if (kind === 'fill' && typeof body.text !== 'string')
+        return jsonRes(res, 400, { ok: false, error: 'fill needs a "text" string' });
+      busy = true;
+      try {
+        jsonRes(res, 200, await within(act(body.obs, body.action, body.text), 'act'));
+      } catch (e) {
+        afterInput = null;
+        cdpSessions = new WeakMap();
+        jsonRes(res, 200, { ok: false, unknown: true, error: 'Outcome unknown: ' + trimErr(e) });
       } finally {
         busy = false;
       }
@@ -917,7 +1092,7 @@ function closeGallery(){document.getElementById('gallery').classList.remove('ope
   // ── 404 ─────────────────────────────────────────────────────────
   jsonRes(res, 404, {
     ok: false,
-    error: 'Not found. Endpoints: POST /run, POST|GET /shot, GET /health, GET /state, GET /view, POST /interact, /screenshots/{save,list,get}, /profile/{info,snapshot,load,reset}',
+    error: 'Not found. Endpoints: POST /run, POST /observe, POST /act, POST|GET /shot, GET /health, GET /state, GET /view, POST /interact, /screenshots/{save,list,get}, /profile/{info,snapshot,load,reset}',
   });
 });
 
