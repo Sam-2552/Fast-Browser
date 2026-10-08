@@ -33,7 +33,7 @@ function readBody(req) {
 
 function requestKind(q) {
   if (q?.operation) return 'main';
-  if (q?.value) return 'value';
+  if (Object.keys(q || {}).some(k => k.startsWith('value_'))) return 'value';
   if (q?.irreversible) return 'noul';
   return 'other';
 }
@@ -100,10 +100,14 @@ function answer(questions, kind, e) {
       answers[name] = choice(keys, chosen);
     }
   } else if (kind === 'value') {
-    const keys = Object.keys(questions.value.criteria || {});
-    let v = e?.value ?? 'ask_agent';
-    if (!keys.includes(v)) { notes.push(`value ${v} not offered (${keys.join(',')}); answered ask_agent`); v = 'ask_agent'; }
-    answers.value = e?.invalid ? invalidChoice(keys) : choice(keys, v);
+    const v = e?.value ?? 'ask_agent';
+    const names = [];
+    for (const [qn, q] of Object.entries(questions)) {
+      const name = /supplied as "([^"]+)"/.exec(q.instructions || '')?.[1];
+      names.push(name);
+      answers[qn] = e?.invalid ? { noul: 'yes' } : { type: 'noul', noul: name === v ? 0.9 : 0.05 };
+    }
+    if (v !== 'ask_agent' && !names.includes(v)) notes.push(`value ${v} not offered (${names.join(',')})`);
   } else if (kind === 'noul') {
     answers.irreversible = e?.invalid ? { noul: 'yes' } : { noul: e?.noul ?? 0.05 };
   } else {

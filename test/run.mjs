@@ -123,7 +123,8 @@ async function scriptSet(entries) {
 async function reqs() { return (await request('GET', `${M}/requests`)).json || []; }
 async function notes() { return (await request('GET', `${M}/notes`)).json; }
 const mainReqs = rs => rs.filter(r => r.questions?.operation);
-const asks = (rs, name) => rs.filter(r => r.questions?.[name]);
+const asks = (rs, name) => rs.filter(r => name === 'value'
+  ? Object.keys(r.questions || {}).some(k => k.startsWith('value_')) : r.questions?.[name]);
 async function until(fn, ms = 10000, what = 'condition') {
   const end = Date.now() + ms;
   for (;;) {
@@ -542,7 +543,8 @@ test('decider: matching value fills without pausing', async () => {
   eq(await ev(`document.querySelector('#field').value`), 'Bern', 'field value');
   const v = asks(await reqs(), 'value');
   eq(v.length, 1, 'one value question');
-  eq(Object.keys(v[0].questions.value.criteria).sort(), ['ask_agent', 'city', 'country'], 'value criteria');
+  eq(Object.keys(v[0].questions).sort(), ['value_1', 'value_2'], 'one yes/no per value');
+  ok(/supplied as "city"/.test(v[0].questions.value_1.instructions) && v[0].questions.value_1.type === 'noul', 'value_1 asks about city');
 });
 
 test('decider: no matching value pauses needs_text; continue types it', async () => {
